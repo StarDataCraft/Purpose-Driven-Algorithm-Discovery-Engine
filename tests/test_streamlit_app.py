@@ -125,6 +125,13 @@ target.main()
     assert app.session_state["current_research_run"].run_id == run_id
     assert app.session_state["current_research_run"].actual_search_mode == "LIVE"
 
+    app.radio(key="_workflow_page").set_value(CANDIDATE_PAGE).run()
+    app.button(key="_candidate_generate_end_to_end").click().run()
+    assert app.session_state["current_research_run"].actual_search_mode == "LIVE"
+    assert app.session_state["current_external_run"] is None
+    assert app.session_state["candidate_run_diagnostics"]["status"] == "failure"
+    assert "Complete Step 4" in app.session_state["candidate_run_diagnostics"]["error"]
+
 
 def test_candidate_page_without_prerequisites_is_actionable():
     app = AppTest.from_file(str(APP_PATH), default_timeout=30).run()

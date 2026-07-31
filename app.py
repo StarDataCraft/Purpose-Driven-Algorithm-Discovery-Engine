@@ -1095,6 +1095,12 @@ def prepare_missing_candidate_stages(
 
     report(20, "1/5 Preparing gap")
     if not st.session_state.gaps:
+        run = st.session_state.current_research_run
+        if not run or run.actual_search_mode != "OFFLINE_FIXTURE":
+            raise ValueError(
+                "No gap corpus is available. Complete Step 1 with live, cached, "
+                "or explicitly selected offline evidence first."
+            )
         papers = load_fixture("ml_papers.json")
         queries = generate_ml_queries(purpose)
         st.session_state.ml_search_diagnostics = offline_diagnostics(
@@ -1120,6 +1126,12 @@ def prepare_missing_candidate_stages(
 
     report(40, "2/5 Retrieving mechanisms")
     if not st.session_state.mechanisms:
+        run = st.session_state.current_research_run
+        if not run or run.actual_search_mode != "OFFLINE_FIXTURE":
+            raise ValueError(
+                "External evidence is missing. Complete Step 4; live or cached "
+                "runs are never silently replaced with demonstration fixtures."
+            )
         papers = load_fixture("external_papers.json")
         mechanisms, rejected = extract_mechanisms(papers)
         mechanism_fallback = not mechanisms
