@@ -14,6 +14,12 @@ deterministic diagrams with fallbacks and keeps raw JSON secondary. Technical
 provenance, evidence audits, evaluation, annotation, and memory remain under
 Research Tools.
 
+Part 2 invokes reusable external discovery and idea pipelines directly.
+LIVE/CACHE/OFFLINE policy is inherited from Part 1, direction identity is
+validated before reuse, and cache misses or zero mechanism/alignment results
+produce stage-specific recovery information. No silent fixture fallback or
+alignment-threshold relaxation was added.
+
 Audited after `pytest`, compilation, import, and Streamlit launch checks.
 
 | Criterion | Status | Concrete evidence |
@@ -91,7 +97,7 @@ These do not violate the product boundary but must remain visible:
 | Semantic aggregation safeguards | PASS | Embedding threshold plus type/component/failure/family compatibility test. |
 | Optional SciBERT | PASS | Valid fine-tuned checkpoint required; base encoder never treated as classifier. |
 | Weak-supervision fallback | PASS | Weighted multi-label votes, section evidence, conflicts and tests. |
-| Human annotation workflow | PASS | Versioned 13-row seed set and optional Step 2 UI/export. |
+| Human annotation workflow | PASS | Versioned 13-row seed set and optional Research Tools UI/export. |
 | Context-aware classification | PASS | Bounded section/previous/target/next representation and test. |
 | Training/evaluation tools | PASS | Optional local SciBERT training uses paper splits, class-weighted multi-label BCE, fixed seeds, early stopping, checkpoints, and per-label/macro/micro metrics; no checkpoint was trained in this task. |
 | Classifier performance claims | PASS | None made; model card explicitly prohibits claims without held-out evaluation. |
@@ -109,12 +115,12 @@ future adequately sized adjudicated dataset.
 
 | Criterion | Status | Evidence |
 |---|---|---|
-| Live-first default | PASS | Step 1 source radio defaults to Live scholarly APIs; OpenAlex/arXiv default enabled. |
+| Live-first default | PASS | Discover directions defaults to Live scholarly APIs; OpenAlex/arXiv enabled. |
 | Actual mode from provenance | PASS | `ResearchRun.finalize_from_papers`; mocked LIVE/CACHE/FAILED/FIXTURE tests. |
 | Explicit fixture versus fallback | PASS | `retrieve_corpus` requires explicit mode or authorized fallback and records reason. |
 | Paper-level provenance | PASS | Retrieval origin/time, query/request/cache/fixture/rank fields plus merged history. |
 | Complete source counts | PASS | `SourceRetrievalResult` and UI table include raw/unique/cache/failure/duration. |
-| Requested/actual year ranges | PASS | Separate `ResearchRun` fields and Step 2 display. |
+| Requested/actual year ranges | PASS | Separate `ResearchRun` fields and technical provenance display. |
 | Two-stage queries | PASS | `generate_problem_queries`, binding detection, focused queries, production integration. |
 | No unsupported AdaBoost binding | PASS | Evidence or explicit family restriction required; query regression test. |
 | Recovery metric expansion | PASS | Controlled recurring-drift metric family and tests. |

@@ -22,6 +22,18 @@ separate from system inference. The derivation is:
 Mechanisms retain signal, state, trigger, response, constraint, and failure
 boundary. Candidate ideas retain the selected-gap snapshot and alignment path.
 
+The Part 2 action automatically translates the selected gap, selects external
+domains, retrieves their literature, extracts operational mechanisms, enforces
+structural alignment, and synthesizes the portfolio. It inherits Part 1's
+search policy: LIVE remains live-first, CACHE requires a matching cache and
+offers an explicit live retry on a miss, and OFFLINE_FIXTURE remains visibly a
+demonstration. Fixtures never silently replace live evidence.
+
+External results are keyed by parent run, direction, gap, and policy. Selecting
+a different direction clears them; reselecting the same direction reuses a
+matching session result. Zero-mechanism and zero-alignment outcomes show stage,
+evidence, rejection, and recovery details without lowering hard thresholds.
+
 ## 3. Explain the idea / 解释新想法
 
 This combines candidate details, novelty/falsification, minimal experiment, and

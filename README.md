@@ -18,13 +18,19 @@ dependencies are not required for this check.
 
 1. **Discover directions / 发现方向** — search papers and select an
    evidence-backed candidate direction.
-2. **Analyze the gap / 分析 Gap** — inspect coverage, unresolved evidence,
-   external mechanisms, structural correspondence, and candidate ideas.
+2. **Analyze the gap / 分析 Gap** — inspect coverage and automatically retrieve
+   direction-specific external evidence, extract mechanisms, test structural
+   correspondence, and derive candidate ideas.
 3. **Explain the idea / 解释新想法** — read the exact algorithm change,
    deterministic diagrams, uncertainty, papers, and falsification experiment.
 
 Architecture-oriented views remain under **Research Tools / 研究工具**. See
 [`THREE_PART_WORKFLOW.md`](THREE_PART_WORKFLOW.md).
+
+Part 2 inherits the search policy selected in Part 1. Live runs never silently
+fall back to fixtures; cache misses offer an explicit live retry; offline runs
+remain labeled demonstrations. Changing direction invalidates its external
+evidence, while reselecting the same direction can reuse a matching result.
 
 目的驱动的跨学科算法发现引擎
 
@@ -252,7 +258,7 @@ algorithm family, preventing embedding-only overmerge.
 The lightweight and enhanced modes use a weighted multi-label rule ensemble with section
 evidence and conflict handling. Full mode uses hybrid rules plus SciBERT **only** when a
 valid locally fine-tuned checkpoint exists. The pretrained encoder alone is not a gap
-classifier. The optional Step 2 Research Tools panel supports human correction and
+classifier. The optional Research Tools panel supports human correction and
 JSONL/CSV export.
 
 The curated seed annotations are intentionally small:

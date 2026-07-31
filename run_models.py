@@ -218,6 +218,13 @@ class ResearchRun:
     exploratory_gap_count: int = 0
     selected_gap_snapshot: dict[str, Any] = field(default_factory=dict)
     alignment_funnel: dict[str, int] = field(default_factory=dict)
+    search_policy: dict[str, Any] = field(default_factory=dict)
+    selected_direction_id: str = ""
+    external_requested_mode: str = ""
+    external_actual_mode: str = ""
+    external_paper_ids: list[str] = field(default_factory=list)
+    mechanism_bearing_paper_ids: list[str] = field(default_factory=list)
+    alignment_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

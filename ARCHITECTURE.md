@@ -16,6 +16,12 @@ scores. `diagram_builders.py` creates deterministic DOT and text-fallback
 specifications without Streamlit or generative dependencies. State invalidation
 is downstream-only for purpose, direction, and idea changes.
 
+`external_discovery_pipeline.py` owns direction-scoped translation, retrieval,
+mechanism extraction, and hard structural alignment. `idea_pipeline.py`
+composes that result with the existing candidate search and portfolio selector.
+Both are Streamlit-independent and join results to the parent ResearchRun with
+parent-run, direction, gap, and inherited SearchPolicy identity.
+
 ## Capability modes
 
 - `lightweight` (default): TF-IDF, deterministic extraction, coverage matrices,
@@ -76,7 +82,7 @@ requires structural compatibility in addition to embedding similarity.
 `weak_supervision.py` emits weighted, conflicting, multi-label votes.
 `sentence_classifier.py` provides rule, fine-tuned SciBERT, and hybrid backends. Base
 SciBERT is never presented as a trained classifier. Context windows preserve section,
-previous, target, and next sentences. `annotation_schema.py` and the Step 2 Research Tools
+previous, target, and next sentences. `annotation_schema.py` and Research Tools
 UI support bounded human review and JSONL/CSV export.
 
 ## Persistence and bounds

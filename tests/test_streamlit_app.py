@@ -127,3 +127,30 @@ def test_empty_parts_are_actionable_not_blank():
     assert any("Select a research direction" in item.value for item in app.info)
     app.radio(key="_primary_step").set_value(PART_3).run()
     assert any("Select an idea" in item.value for item in app.info)
+
+
+def test_same_direction_reuses_and_different_direction_rebuilds_external_state():
+    app = run_offline_part_1(app_start())
+    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key="_derive_ideas").click().run(timeout=30)
+    first = app.session_state["current_external_result"]
+    first_identity = first.identity()
+
+    app.radio(key="_primary_step").set_value(PART_1).run()
+    app.button(key="_select_direction_0").click().run(timeout=30)
+    assert app.session_state["current_external_result"].identity() == first_identity
+    assert app.session_state["current_idea_portfolio"]
+
+    app.radio(key="_primary_step").set_value(PART_1).run()
+    app.button(key="_select_direction_1").click().run(timeout=30)
+    assert app.session_state["current_external_result"] is None
+    app.button(key="_derive_ideas").click().run(timeout=30)
+    second = app.session_state["current_external_result"]
+    assert second.identity() != first_identity
+    assert second.papers
+    visible = " ".join(
+        str(item.value) for kind in (app.error, app.warning, app.info)
+        for item in kind
+    )
+    assert "Complete Step 4" not in visible
+    assert "('Novelty remains unverified.',)" not in visible

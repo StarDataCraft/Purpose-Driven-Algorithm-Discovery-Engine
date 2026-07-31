@@ -62,6 +62,8 @@ from diagram_builders import (
     before_after_spec, evidence_to_idea_spec, experiment_spec,
     mechanism_transfer_spec,
 )
+from external_discovery_pipeline import SearchPolicy
+from idea_pipeline import derive_ideas_for_direction
 
 PRIMARY_STEPS = [
     "1 · Discover directions / 发现方向",
@@ -234,6 +236,7 @@ def initialize_state() -> None:
         "selected_idea_id": "",
         "current_result_explanation": None,
         "current_diagram_specs": [],
+        "current_external_result": None,
         "active_primary_step": PRIMARY_STEPS[0],
         "ux_performance": {},
         "engine_diagnostics": engine_state_defaults(SETTINGS),
@@ -345,6 +348,7 @@ def invalidate_downstream_for_purpose() -> None:
         "selected_direction_snapshot": None, "selected_gap_family_id": "",
         "current_idea_portfolio": [], "selected_idea_id": "",
         "current_result_explanation": None, "current_diagram_specs": [],
+        "current_external_result": None,
     }.items():
         st.session_state[key] = empty
 
@@ -357,6 +361,7 @@ def invalidate_downstream_for_gap() -> None:
         st.session_state[key] = []
     st.session_state.external_search_diagnostics = None
     st.session_state.current_external_run = None
+    st.session_state.current_external_result = None
     st.session_state.current_idea_portfolio = []
     st.session_state.selected_idea_id = ""
     st.session_state.current_result_explanation = None
@@ -494,7 +499,7 @@ def navigate_to(page: str) -> None:
 
 
 def choose_search_mode(mode: str, force_fresh: bool = False) -> None:
-    """Return to Step 1 with an explicit retrieval choice."""
+    """Return to Discover directions with an explicit retrieval choice."""
     st.session_state["_purpose_search_mode"] = mode
     st.session_state["_purpose_force_fresh"] = force_fresh
     st.session_state["_primary_step"] = PRIMARY_STEPS[0]
@@ -522,23 +527,23 @@ def candidate_prerequisites() -> dict[str, tuple[bool, str]]:
     return {
         "Purpose contract": (
             purpose is not None,
-            "Complete Step 1: Goal setup",
+            "Return to Discover directions",
         ),
         "Selected gap": (
             gap is not None,
-            "Complete Step 2: Latest ML/DL gap radar",
+            "Select a research direction",
         ),
         "External mechanisms": (
             bool(mechanisms),
-            "Complete Step 4: External mechanism search",
+            "Search external evidence",
         ),
         "Accepted structural alignments": (
             bool(accepted),
-            "Complete Step 5: Structural alignment",
+            "Inspect structural alignment",
         ),
         "Direction families ready/generated": (
             bool(st.session_state.direction_families) or bool(accepted),
-            "Complete Step 6: Research direction families",
+            "Derive candidate ideas",
         ),
         "Compatible base algorithm": (
             compatible_algorithm,
@@ -546,11 +551,11 @@ def candidate_prerequisites() -> dict[str, tuple[bool, str]]:
         ),
         "Primary metric": (
             bool(purpose and purpose.primary_metric),
-            "Define a primary metric in Step 1",
+            "Define a primary metric in Discover directions",
         ),
         "Inference information": (
             bool(purpose and purpose.available_inference_information),
-            "Define inference-time information in Step 1",
+            "Define inference-time information in Discover directions",
         ),
     }
 
@@ -1270,169 +1275,33 @@ def evidence_page() -> None:
 
 
 def mechanism_page() -> None:
-    st.title("External mechanism search")
-    gap = st.session_state.selected_gap
-    if not gap:
-        st.info("Select a verified gap first.")
+    """Technical view of the same reusable pipeline used by Part 2."""
+    st.title("External mechanism search · technical view")
+    if not st.session_state.selected_direction_snapshot:
+        st.info("Select a research direction before searching external evidence.")
         return
-    signature = normalize_cross_domain_problem(gap)
-    selections = select_external_domains(
-        signature, SETTINGS.maximum_external_domains
-    )
-    selected_domains = [item.domain for item in selections if item.selected]
-    queries = generate_external_queries(gap, selected_domains)
-    st.session_state.cross_domain_signature = signature
-    st.session_state.domain_selections = selections
-    st.session_state.external_queries = queries
-    current_run = st.session_state.current_research_run
-    if current_run:
-        upsert_stage(current_run, StageRun(
-            stage_id=f"{current_run.run_id}:external_domain_selection",
-            stage_name="external_domain_selection",
-            parent_run_id=current_run.run_id,
-            started_at=utc_now(), completed_at=utc_now(),
-            raw_input_count=len(selections),
-            output_count=len(selected_domains),
-            accepted_count=len(selected_domains),
-            rejected_count=len(selections) - len(selected_domains),
-            model_backend="controlled_domain_profiles",
-        ))
-    st.subheader("Normalized cross-domain problem signature")
-    st.json(asdict(signature))
-    st.subheader("Ranked external domains")
-    st.dataframe([asdict(item) for item in selections], use_container_width=True)
-    st.subheader("Discipline-native query translations")
-    for domain, domain_queries in queries.items():
-        with st.expander(domain, expanded=True):
-            for query in domain_queries:
-                st.code(query)
-    st.caption(
-        "Rejected raw query candidates: none. Queries are generated directly "
-        "from controlled discipline profiles and still pass deterministic validation."
-    )
-    external_mode = st.radio(
-        "External search data source",
-        ["Live scholarly APIs", "Cached live results",
-         "Offline demonstration fixtures"],
-        key="_mechanism_search_mode",
-    )
-    force_fresh = st.checkbox(
-        "Force fresh search (bypass local cache)",
-        value=False,
-        key="_mechanism_force_fresh",
-        help="Applies only to live mode. API rate limits and retry delays remain active.",
-    )
-    if st.button(
-        "Fetch and extract mechanisms", type="primary", key="_mechanism_fetch"
-    ):
-        requested_mode = {
-            "Live scholarly APIs": "LIVE",
-            "Cached live results": "CACHE",
-            "Offline demonstration fixtures": "OFFLINE_FIXTURE",
-        }[external_mode]
-        indexed_external_queries = [
-            (domain, query) for domain, domain_queries in queries.items()
-            for query in domain_queries
-        ]
-        external_query_list = [query for _, query in indexed_external_queries]
-        papers, external_run = retrieve_corpus(
-            st.session_state.purpose, external_query_list,
-            requested_mode=requested_mode,
-            sources=["openalex", "arxiv"], maximum_per_query=6,
-            maximum_total=60, allow_cache=True,
-            allow_offline_fallback=False, force_fresh=force_fresh,
-            fixture_loader=lambda: load_fixture("external_papers.json"),
-            fixture_path="data/offline_fixtures/external_papers.json",
-            stage_name="external_retrieval",
-        )
-        external_run.external_queries_by_domain = queries
-        current_run = st.session_state.current_research_run
-        if current_run:
-            external_run.parent_run_id = current_run.run_id
-            external_run.run_id = current_run.run_id
-            current_run.external_queries_by_domain = queries
-            current_run.external_query_count = len(external_query_list)
-            current_run.total_query_count = (
-                current_run.broad_query_count
-                + current_run.focused_query_count
-                + current_run.external_query_count
-            )
-            current_run.query_count = current_run.total_query_count
-            for stage in external_run.stages:
-                stage.parent_run_id = current_run.run_id
-                stage.stage_id = (
-                    f"{current_run.run_id}:{stage.stage_name}:external"
-                )
-            current_run.stages.extend(external_run.stages)
-            current_run.source_stage_result_count += len(
-                external_run.source_results
-            )
-            current_run.stage_records["external_retrieval"] = {
-                "actual_search_mode": external_run.actual_search_mode,
-                "paper_count": len(papers),
-                "sources": external_run.sources_attempted,
-                "source_results": [
-                    asdict(item) for item in external_run.source_results
-                ],
-                "paper_ids": [paper.paper_id for paper in papers],
-                "queries_by_domain": queries,
-            }
-        for paper in papers:
-            indices = [
-                int(query_id.split(":", 1)[1])
-                for query_id in paper.query_ids if query_id.startswith("q:")
-            ]
-            if indices:
-                paper.domain = indexed_external_queries[indices[0]][0]
-        mechanisms, rejected = extract_mechanisms(papers)
-        mechanism_fallback = not mechanisms
-        if not mechanisms:
-            mechanisms = load_mechanism_seeds()
-        for mechanism in mechanisms:
-            mechanism.research_run_id = external_run.run_id
-        external_run.mechanism_count = len(mechanisms)
-        target_run = current_run or external_run
-        upsert_stage(target_run, StageRun(
-            stage_id=f"{target_run.run_id}:mechanism_extraction",
-            stage_name="mechanism_extraction",
-            parent_run_id=target_run.run_id,
-            started_at=utc_now(), completed_at=utc_now(),
-            raw_input_count=len(papers), output_count=len(mechanisms),
-            accepted_count=len(mechanisms), rejected_count=len(rejected),
-            model_backend="typed_deterministic_extractor",
-        ))
-        mechanism_ids = {
-            paper_id for mechanism in mechanisms
-            for paper_id in mechanism.evidence_paper_ids
-        }
-        for result in external_run.source_results:
-            result.mechanism_bearing_paper_count = len(
-                set(result.paper_ids) & mechanism_ids
-            )
-        if mechanism_fallback:
-            external_run.warnings.append(
-                "No mechanism was extracted; curated mechanism seeds were used."
-            )
-        st.session_state.external_papers = papers
-        st.session_state.current_external_run = external_run
-        st.session_state.external_search_diagnostics = None
-        st.session_state.mechanisms = cross_domain_only(mechanisms)
-        st.session_state.rejected_mechanisms = rejected
-        st.session_state.fetch_failures.update(external_run.source_failures)
-        if current_run:
-            generate_quality_warnings(current_run)
-    render_research_run(
-        st.session_state.current_external_run,
-        "Latest external paper search",
-    )
+    if st.button("Run direction-scoped external pipeline", key="_mechanism_fetch"):
+        build_current_idea_portfolio()
+    result = st.session_state.current_external_result
+    if not result:
+        st.info("Search external evidence from Analyze the gap or run it here.")
+        return
+    st.json({
+        "identity": result.identity(),
+        "problem": asdict(result.cross_domain_problem_signature),
+        "domains": [asdict(item) for item in result.ranked_domain_selections],
+        "queries": result.accepted_queries_by_domain,
+        "diagnostics": result.stage_diagnostics,
+        "warnings": result.warnings,
+        "errors": result.errors,
+    })
+    render_research_run(result.retrieval_run, "External retrieval provenance")
     st.dataframe([{
-        "mechanism": m.name, "domain": m.source_domain,
-        "signal": m.observed_signal, "response": m.response_rule,
-        "evidence": m.evidence_count, "confidence": m.confidence_score,
-    } for m in st.session_state.mechanisms], use_container_width=True)
-    st.caption(f"Rejected invalid phrases: {len(st.session_state.rejected_mechanisms)}")
-    with st.expander("Rejected extraction details"):
-        st.json(st.session_state.rejected_mechanisms)
+        "mechanism": item.name, "domain": item.source_domain,
+        "signal": item.observed_signal, "state": item.internal_state,
+        "trigger": item.trigger_condition, "response": item.response_rule,
+        "evidence": item.evidence_count,
+    } for item in result.mechanisms], use_container_width=True)
 
 
 def alignment_page() -> None:
@@ -1584,14 +1453,14 @@ def prepare_missing_candidate_stages(
 
     purpose = st.session_state.purpose
     if purpose is None:
-        raise ValueError("Purpose contract is missing. Complete Step 1 first.")
+        raise ValueError("Purpose contract is missing. Return to Discover directions.")
 
     report(20, "1/5 Preparing gap")
     if not st.session_state.gaps:
         run = st.session_state.current_research_run
         if not run or run.actual_search_mode != "OFFLINE_FIXTURE":
             raise ValueError(
-                "No gap corpus is available. Complete Step 1 with live, cached, "
+                "No gap corpus is available. Run Discover directions with live, cached, "
                 "or explicitly selected offline evidence first."
             )
         papers = load_fixture("ml_papers.json")
@@ -1632,8 +1501,9 @@ def prepare_missing_candidate_stages(
         run = st.session_state.current_research_run
         if not run or run.actual_search_mode != "OFFLINE_FIXTURE":
             raise ValueError(
-                "External evidence is missing. Complete Step 4; live or cached "
-                "runs are never silently replaced with demonstration fixtures."
+                "External evidence is missing. Search external evidence for the "
+                "selected direction; live or cached runs are never silently "
+                "replaced with demonstration fixtures."
             )
         papers = load_fixture("external_papers.json")
         mechanisms, rejected = extract_mechanisms(papers)
@@ -1666,7 +1536,7 @@ def prepare_missing_candidate_stages(
     if not any(not result.rejected for result in st.session_state.alignments):
         raise ValueError(
             "No structural alignments passed hard validation. "
-            "Return to Step 4 or select another gap."
+            "Search different external evidence or choose another direction."
         )
 
     report(80, "4/5 Synthesizing candidates")
@@ -1764,11 +1634,9 @@ def candidates_page() -> None:
         next_action = missing[0][1]
         st.warning(next_action)
         target = (
-            PAGES[0] if "Step 1" in next_action
-            else PAGES[1] if "Step 2" in next_action
-            else PAGES[3] if "Step 4" in next_action
-            else PAGES[4] if "Step 5" in next_action
-            else PAGES[5]
+            PRIMARY_STEPS[0]
+            if next_action in {"Return to Discover directions", "Select a research direction"}
+            else PRIMARY_STEPS[1]
         )
         st.button(
             next_action,
@@ -2048,6 +1916,13 @@ def execute_direction_search(
         fixture_path="data/offline_fixtures/ml_papers.json",
         stage_name="broad_ml_retrieval",
     )
+    run.search_policy = SearchPolicy(
+        requested_mode=requested_mode, sources=tuple(sources),
+        allow_cache=allow_cache, force_fresh=force_fresh,
+        allow_offline_fallback=allow_offline_fallback,
+        maximum_per_query=maximum_per_query,
+        maximum_total=maximum_total,
+    ).to_dict()
     bindings = detect_algorithm_bindings(papers, purpose)
     focused_queries, focused_audit = generate_focused_algorithm_queries(
         purpose, bindings, SETTINGS.algorithm_binding_confidence_threshold
@@ -2127,6 +2002,28 @@ def select_idea(candidate_id: str) -> None:
     st.session_state.current_diagram_specs = []
     st.session_state["_primary_step"] = PRIMARY_STEPS[2]
     st.session_state.active_primary_step = PRIMARY_STEPS[2]
+
+
+def set_external_live_retry() -> None:
+    """Explicitly authorize a live retry after a cache-only miss."""
+    run = st.session_state.current_research_run
+    if not run:
+        return
+    policy = SearchPolicy.from_dict(run.search_policy or {})
+    run.search_policy = SearchPolicy(
+        requested_mode="LIVE", sources=policy.sources,
+        allow_cache=policy.allow_cache, force_fresh=False,
+        allow_offline_fallback=policy.allow_offline_fallback,
+        maximum_per_query=policy.maximum_per_query,
+        maximum_total=policy.maximum_total,
+    ).to_dict()
+    for key, value in {
+        "current_external_result": None, "external_papers": [],
+        "mechanisms": [], "rejected_mechanisms": [], "alignments": [],
+        "candidate_portfolio": [], "current_idea_portfolio": [],
+        "current_result_explanation": None, "current_diagram_specs": [],
+    }.items():
+        st.session_state[key] = value
 
 
 def render_compact_run_summary() -> None:
@@ -2308,7 +2205,7 @@ def discover_directions_page() -> None:
                 "Known solutions": direction.known_solution_status,
                 "Confidence": round(direction.evidence_confidence, 2),
                 "Risk": direction.risk_level,
-                "Uncertainty": "; ".join(direction.uncertainties),
+                "Uncertainty": readable_items(direction.uncertainties),
             })
             with st.expander("View related papers / 查看相关论文"):
                 render_related_papers(direction)
@@ -2321,26 +2218,66 @@ def discover_directions_page() -> None:
             )
 
 
-def build_current_idea_portfolio() -> None:
-    prepare_missing_candidate_stages()
+def build_current_idea_portfolio(progress_callback: object | None = None) -> None:
     direction = st.session_state.selected_direction_snapshot
     gap = st.session_state.selected_gap
     run = st.session_state.current_research_run
-    derivations = []
-    for candidate in st.session_state.candidate_portfolio[:5]:
-        mechanism = next((
-            item for item in st.session_state.mechanisms
-            if item.name in candidate.borrowed_mechanisms
-            or item.mechanism_id in candidate.borrowed_mechanisms
-        ), st.session_state.mechanisms[0])
-        alignment = next((
-            item for item in st.session_state.alignments
-            if item.mechanism_id == mechanism.mechanism_id and not item.rejected
-        ), next(item for item in st.session_state.alignments if not item.rejected))
-        derivations.append(build_idea_derivation(
-            run.run_id, direction, gap, mechanism, alignment, candidate
-        ))
-    st.session_state.current_idea_portfolio = derivations
+    existing = st.session_state.current_external_result
+    identity = (run.run_id, direction.direction_id, gap.gap_id)
+    if (
+        existing and existing.identity() == identity
+        and existing.stage_diagnostics.get("search_policy") == run.search_policy
+        and st.session_state.current_idea_portfolio
+    ):
+        existing.reused_from_session = True
+        return
+    policy = SearchPolicy.from_dict(run.search_policy or {
+        "requested_mode": run.requested_search_mode,
+        "sources": run.sources_attempted or ["openalex", "arxiv"],
+        "allow_cache": run.cache_ttl_seconds > 0,
+    })
+    result = derive_ideas_for_direction(
+        purpose=st.session_state.purpose, direction=direction, gap=gap,
+        parent_run=run, search_policy=policy, seed=st.session_state.seed,
+        memory_path=DEFAULT_DB,
+        fixture_loader=lambda: load_fixture("external_papers.json"),
+        progress_callback=progress_callback if callable(progress_callback) else None,
+    )
+    st.session_state.current_external_result = result.external_result
+    st.session_state.external_papers = result.external_result.papers
+    st.session_state.current_external_run = result.external_result.retrieval_run
+    st.session_state.mechanisms = result.external_result.mechanisms
+    st.session_state.rejected_mechanisms = result.external_result.rejected_mechanisms
+    st.session_state.alignments = result.external_result.alignments
+    st.session_state.candidate_portfolio = result.portfolio
+    st.session_state.direction_families = result.direction_families
+    st.session_state.current_idea_portfolio = result.derivations
+    st.session_state.candidate_run_diagnostics = {
+        **result.diagnostics,
+        "error": "; ".join(result.external_result.errors),
+        "warnings": result.external_result.warnings,
+    }
+    generate_quality_warnings(run)
+
+
+def readable_items(values: object) -> str:
+    """Format structured sequences without exposing Python repr syntax."""
+    if values is None:
+        return "Not recorded"
+    if isinstance(values, (list, tuple, set)):
+        cleaned = [str(item).strip() for item in values if str(item).strip()]
+        return "; ".join(cleaned) if cleaned else "None recorded"
+    return str(getattr(values, "value", values))
+
+
+def render_bullets(values: object, empty: str = "None recorded") -> None:
+    items = list(values) if isinstance(values, (list, tuple, set)) else [values]
+    cleaned = [str(item).strip() for item in items if item and str(item).strip()]
+    if not cleaned:
+        st.write(empty)
+        return
+    for item in cleaned:
+        st.markdown(f"- {item}")
 
 
 def analyze_gap_page() -> None:
@@ -2400,33 +2337,107 @@ def analyze_gap_page() -> None:
     st.subheader("Unresolved remainder / 尚未解决")
     st.write(gap.unresolved_remainder or direction.unresolved_remainder)
     st.subheader("Uncertainty / 不确定性")
-    st.write(direction.uncertainties)
+    for uncertainty in direction.uncertainties:
+        st.markdown(f"- {uncertainty}")
     if not st.session_state.current_idea_portfolio:
         if st.button(
-            "Derive candidate ideas / 推导候选想法",
+            "Search external evidence and derive ideas / 检索外部证据并推导想法",
             type="primary", key="_derive_ideas",
+            help="Automatically searches external literature, extracts mechanisms, "
+                 "tests structural alignment, and builds candidate ideas.",
         ):
             part_started = time.perf_counter()
-            with st.spinner("Searching mechanisms, aligning structures, and synthesizing ideas…"):
-                try:
-                    build_current_idea_portfolio()
-                    st.session_state.ux_performance[
-                        "part_2_analysis_seconds"
-                    ] = round(time.perf_counter() - part_started, 4)
-                except Exception as exc:
-                    st.session_state.candidate_run_diagnostics = {
-                        "status": "failure", "error": str(exc),
-                        "rejections": {}, "rejected_paths": [],
-                    }
-                    st.error(f"Could not derive ideas: {exc}")
+            progress = st.progress(0, text="1/6 Translating the research gap")
+            build_current_idea_portfolio(
+                lambda value, label: progress.progress(value, text=label)
+            )
+            progress.progress(100, text="6/6 Building candidate ideas")
+            progress.empty()
+            st.session_state.ux_performance[
+                "part_2_analysis_seconds"
+            ] = round(time.perf_counter() - part_started, 4)
+    external = st.session_state.current_external_result
+    if external:
+        st.header("Normalized problem / 规范化问题")
+        signature = external.cross_domain_problem_signature
+        st.write({
+            "System condition": signature.system_condition,
+            "Observed failure": signature.observed_failure,
+            "Required capability": signature.desired_capability,
+            "Memory requirement": signature.memory_requirement,
+            "Resource constraint": signature.resource_constraint,
+            "Affected ML slot": signature.affected_ml_slot,
+        })
+        st.header("Selected external domains / 已选外部领域")
+        for selection in external.ranked_domain_selections:
+            if selection.selected:
+                st.write({
+                    "Domain": selection.domain,
+                    "Why selected": readable_items(selection.reasons),
+                    "Matched roles": readable_items(selection.matched_problem_roles),
+                    "Relevance": round(selection.relevance_score, 2),
+                    "Analogy limitations": readable_items(selection.missing_correspondence),
+                })
+        st.header("External search evidence / 外部检索证据")
+        retrieval = external.retrieval_run
+        if retrieval.actual_search_mode == "OFFLINE_FIXTURE":
+            st.warning(
+                "OFFLINE DEMONSTRATION — external evidence uses bundled papers "
+                "and is not a current literature search."
+            )
+        st.write({
+            "Actual search mode": retrieval.actual_search_mode,
+            "Sources": readable_items(retrieval.sources_attempted),
+            "Queries": sum(len(items) for items in external.accepted_queries_by_domain.values()),
+            "Papers retrieved": retrieval.raw_paper_count,
+            "Papers after deduplication": retrieval.deduplicated_paper_count,
+            "Automatically relevant": retrieval.automatically_relevant_paper_count,
+            "Mechanism-bearing papers": len(
+                st.session_state.current_research_run.mechanism_bearing_paper_ids
+            ),
+            "Cache used": "Yes" if retrieval.cache_used else "No",
+            "Result origin": "session state" if external.reused_from_session else "new direction-scoped run",
+        })
+        with st.expander("Queries, failures, and warnings"):
+            st.write(external.accepted_queries_by_domain)
+            st.write({
+                "Source failures": retrieval.source_failures or "None",
+                "Warnings": readable_items(external.warnings),
+            })
     ideas = st.session_state.current_idea_portfolio
     if not ideas:
         diagnostics = st.session_state.candidate_run_diagnostics or {}
         if diagnostics.get("error"):
-            st.warning(
-                "No external mechanism or candidate idea passed validation. "
-                f"Reason: {diagnostics['error']}"
-            )
+            st.error(diagnostics["error"])
+            st.write({
+                "Completed stages": readable_items(diagnostics.get("completed_stages", [])),
+                "Failed stage": diagnostics.get("failed_stage", "unknown"),
+                "Papers obtained": diagnostics.get("paper_count", 0),
+                "Mechanisms obtained": diagnostics.get("mechanism_count", 0),
+                "Recovery actions": (
+                    "Retry live external search; use matching cached evidence; "
+                    "choose another direction; or open technical diagnostics."
+                ),
+            })
+            if external and external.rejected_mechanisms:
+                with st.expander("Plausible but rejected mechanism details"):
+                    st.write(external.rejected_mechanisms)
+            if external and external.mechanisms and not external.accepted_alignments:
+                st.subheader("Structural alignment rejection matrix")
+                st.dataframe([{
+                    "Mechanism": item.mechanism_id,
+                    "Matched slots": readable_items(item.matched_slots),
+                    "Signal/response match": round(item.score, 2),
+                    "Conflicts": readable_items(item.conflicts),
+                    "Missing information": readable_items(item.missing_information),
+                    "Rejection reason": readable_items(item.rejection_reasons),
+                } for item in external.alignments], use_container_width=True)
+            if external and external.retrieval_run.requested_search_mode == "CACHE":
+                st.button(
+                    "Run live external search / 实时检索外部证据",
+                    key="_external_retry_live",
+                    on_click=set_external_live_retry,
+                )
         return
     st.header("How new ideas are generated / 新想法如何产生")
     first = ideas[0]
@@ -2455,6 +2466,21 @@ def analyze_gap_page() -> None:
                 "Structural match": round(alignment.score, 2) if alignment else "not aligned",
                 "Analogy limitation": "Structural correspondence only; no literal domain equivalence is assumed.",
             })
+    st.header("Structural alignments / 结构对齐")
+    for alignment in external.accepted_alignments if external else []:
+        st.write({
+            "Mechanism": alignment.mechanism_id,
+            "Gap field": gap.failure_type,
+            "Mechanism field": next((
+                item.response_rule for item in st.session_state.mechanisms
+                if item.mechanism_id == alignment.mechanism_id
+            ), "not recorded"),
+            "Matched structural role": readable_items(alignment.matched_slots),
+            "Affected algorithm slot": gap.affected_component,
+            "Match strength": round(alignment.score, 2),
+            "Conflicts": readable_items(alignment.conflicts),
+            "Analogy boundary": "Structural correspondence only; literal equivalence is not assumed.",
+        })
     st.header("Candidate idea portfolio / 候选想法")
     candidates = {
         item.candidate_id: item for item in st.session_state.candidate_portfolio
@@ -2570,19 +2596,22 @@ def explain_idea_page() -> None:
     for spec in st.session_state.current_diagram_specs:
         render_diagram(spec)
     st.header("What could go wrong / 可能失败的地方")
-    st.write(explanation.main_risks or ("Failure modes remain insufficiently characterized.",))
+    render_bullets(
+        explanation.main_risks,
+        "Failure modes remain insufficiently characterized.",
+    )
     st.subheader("What is supported")
-    st.write(explanation.supported_claims)
+    render_bullets(explanation.supported_claims)
     st.subheader("What is inferred")
-    st.write(explanation.inferred_claims)
+    render_bullets(explanation.inferred_claims)
     st.subheader("What is unknown")
-    st.write(explanation.unknowns)
+    render_bullets(explanation.unknowns)
     st.subheader("What evidence would change the conclusion")
-    st.write(explanation.falsification_tests)
+    render_bullets(explanation.falsification_tests)
     st.header("Potential novelty")
     st.write({
         "Status": explanation.novelty_status,
-        "Closest known methods": explanation.closest_known_methods,
+        "Closest known methods": readable_items(explanation.closest_known_methods),
         "Qualification": "Novelty remains unverified until a targeted search and expert review.",
     })
     experiment = explanation.minimal_experiment
