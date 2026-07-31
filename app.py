@@ -53,30 +53,85 @@ def initialize_state() -> None:
 def sidebar() -> str:
     st.sidebar.title("目的驱动 · Discovery Engine")
     st.sidebar.caption("No LLMs. Evidence → purpose → mechanism → experiment.")
-    return st.sidebar.radio("Workflow", PAGES)
+    return st.sidebar.radio("Workflow", PAGES, key="_workflow_page")
 
 
 def goal_page() -> None:
     st.title("Purpose contract")
-    mode = st.radio("Mode", ["User-defined purpose", "Gap radar"])
-    with st.form("purpose"):
+    mode = st.radio(
+        "Mode", ["User-defined purpose", "Gap radar"], key="_purpose_mode"
+    )
+    with st.form("_purpose_form"):
         col1, col2 = st.columns(2)
-        task = col1.text_input("Task", "online learning")
-        data_type = col2.text_input("Data type", "tabular streams")
-        use_case = col1.text_input("Application", "adaptive decision support")
-        failure = col2.text_input("Current failure", "recurring concept drift")
-        improvement = col1.text_input("Desired improvement", "reduce post-shift recovery time")
-        metric = col2.text_input("Primary metric", "average online accuracy")
-        secondary = col1.text_input("Secondary metrics", "recovery time, memory use")
-        preserve = col2.text_input("Must not degrade", "stable-regime accuracy, calibration")
-        training = col1.text_input("Training information", "features, delayed outcome feedback")
-        inference = col2.text_input("Inference information", "input features, prediction residual, regime similarity")
-        algorithm = st.selectbox("Affected algorithm", sorted(load_algorithm_library()))
-        risk = col1.selectbox("Risk tolerance", ["low", "medium", "high"], index=1)
-        scale = col2.selectbox("Combination scale", ["small", "medium", "large"])
-        years = st.slider("Publication window", 2018, date.today().year, (2022, date.today().year))
-        offline = st.checkbox("Use bundled offline evidence (reproducible demo)", value=True)
-        submitted = st.form_submit_button("Discover ML/DL gaps", type="primary")
+        task = col1.text_input("Task", "online learning", key="_purpose_task")
+        data_type = col2.text_input(
+            "Data type", "tabular streams", key="_purpose_data_type"
+        )
+        use_case = col1.text_input(
+            "Application", "adaptive decision support", key="_purpose_use_case"
+        )
+        failure = col2.text_input(
+            "Current failure", "recurring concept drift", key="_purpose_failure"
+        )
+        improvement = col1.text_input(
+            "Desired improvement",
+            "reduce post-shift recovery time",
+            key="_purpose_improvement",
+        )
+        metric = col2.text_input(
+            "Primary metric", "average online accuracy", key="_purpose_metric"
+        )
+        secondary = col1.text_input(
+            "Secondary metrics",
+            "recovery time, memory use",
+            key="_purpose_secondary",
+        )
+        preserve = col2.text_input(
+            "Must not degrade",
+            "stable-regime accuracy, calibration",
+            key="_purpose_preserve",
+        )
+        training = col1.text_input(
+            "Training information",
+            "features, delayed outcome feedback",
+            key="_purpose_training",
+        )
+        inference = col2.text_input(
+            "Inference information",
+            "input features, prediction residual, regime similarity",
+            key="_purpose_inference",
+        )
+        algorithm = st.selectbox(
+            "Affected algorithm",
+            sorted(load_algorithm_library()),
+            key="_purpose_algorithm",
+        )
+        risk = col1.selectbox(
+            "Risk tolerance",
+            ["low", "medium", "high"],
+            index=1,
+            key="_purpose_risk",
+        )
+        scale = col2.selectbox(
+            "Combination scale",
+            ["small", "medium", "large"],
+            key="_purpose_scale",
+        )
+        years = st.slider(
+            "Publication window",
+            2018,
+            date.today().year,
+            (2022, date.today().year),
+            key="_purpose_years",
+        )
+        offline = st.checkbox(
+            "Use bundled offline evidence (reproducible demo)",
+            value=True,
+            key="_purpose_offline",
+        )
+        submitted = st.form_submit_button(
+            "Discover ML/DL gaps", type="primary"
+        )
     if submitted:
         record = load_algorithm_library()[algorithm]
         purpose = PurposeContract(
@@ -116,8 +171,10 @@ def gap_radar_page() -> None:
         f"{g.title} · {g.gap_type} · confidence {g.confidence_score:.2f} · evidence {g.evidence_count}": g
         for g in sorted(gaps, key=lambda x: (x.confidence_score, x.evidence_count), reverse=True)
     }
-    chosen = st.selectbox("Select an evidence-backed gap", labels)
-    if st.button("Use selected gap", type="primary"):
+    chosen = st.selectbox(
+        "Select an evidence-backed gap", labels, key="_gap_radar_selection"
+    )
+    if st.button("Use selected gap", type="primary", key="_gap_radar_submit"):
         st.session_state.selected_gap = labels[chosen]
         st.success("Gap selected. Continue to evidence or external mechanism search.")
     st.dataframe([{
@@ -155,8 +212,12 @@ def mechanism_page() -> None:
     queries = generate_external_queries(gap)
     st.session_state.external_queries = queries
     st.json(queries)
-    offline = st.checkbox("Use bundled external evidence", value=True)
-    if st.button("Fetch and extract mechanisms", type="primary"):
+    offline = st.checkbox(
+        "Use bundled external evidence", value=True, key="_mechanism_offline"
+    )
+    if st.button(
+        "Fetch and extract mechanisms", type="primary", key="_mechanism_fetch"
+    ):
         papers = load_fixture("external_papers.json") if offline else []
         failures = {}
         if not offline:
@@ -222,7 +283,9 @@ def generate_candidates() -> None:
 
 def family_page() -> None:
     st.title("Research direction families")
-    if st.button("Run stochastic structured search", type="primary"):
+    if st.button(
+        "Run stochastic structured search", type="primary", key="_family_search"
+    ):
         generate_candidates()
     if not st.session_state.families:
         st.info("Run search after selecting a gap and mechanisms.")
@@ -234,8 +297,14 @@ def family_page() -> None:
 
 def candidates_page() -> None:
     st.title("Candidate algorithms")
-    st.session_state.seed = st.number_input("Reproducible seed", value=42, step=1)
-    if st.button("Regenerate portfolio", type="primary"):
+    st.session_state.setdefault("_candidate_seed", st.session_state.seed)
+    seed = st.number_input(
+        "Reproducible seed", step=1, key="_candidate_seed"
+    )
+    st.session_state.seed = int(seed)
+    if st.button(
+        "Regenerate portfolio", type="primary", key="_candidate_regenerate"
+    ):
         generate_candidates()
     for candidate in st.session_state.candidates:
         with st.expander(f"{candidate.candidate_name} · {candidate.confidence}", expanded=True):
@@ -278,18 +347,28 @@ def experiment_page() -> None:
         st.info("Generate candidates first.")
         return
     labels = {candidate.candidate_name: candidate for candidate in candidates}
-    candidate = labels[st.selectbox("Candidate", labels)]
+    candidate = labels[
+        st.selectbox("Candidate", labels, key="_experiment_candidate")
+    ]
     st.json(asdict(candidate.minimal_experiment))
-    st.download_button("Download JSON", to_json(candidate.minimal_experiment),
-                       f"{candidate.candidate_id.replace(':', '-')}-experiment.json")
-    st.download_button("Download Markdown", experiment_to_markdown(candidate.minimal_experiment),
-                       f"{candidate.candidate_id.replace(':', '-')}-experiment.md")
+    st.download_button(
+        "Download JSON",
+        to_json(candidate.minimal_experiment),
+        f"{candidate.candidate_id.replace(':', '-')}-experiment.json",
+        key="_experiment_download_json",
+    )
+    st.download_button(
+        "Download Markdown",
+        experiment_to_markdown(candidate.minimal_experiment),
+        f"{candidate.candidate_id.replace(':', '-')}-experiment.md",
+        key="_experiment_download_markdown",
+    )
 
 
 def memory_page() -> None:
     st.title("Research memory")
     memory = ResearchMemory(DEFAULT_DB)
-    if st.button("Save current run"):
+    if st.button("Save current run", key="_memory_save"):
         for gap in st.session_state.gaps:
             memory.save("gap", gap.gap_id, gap)
         for mechanism in st.session_state.mechanisms:
@@ -310,14 +389,29 @@ def memory_page() -> None:
     exported = {
         kind: memory.list(kind) for kind in ("gap", "mechanism", "direction_family", "candidate")
     }
-    st.download_button("Export memory JSON", json.dumps(exported, indent=2), "research-memory.json")
+    st.download_button(
+        "Export memory JSON",
+        json.dumps(exported, indent=2),
+        "research-memory.json",
+        key="_memory_download_json",
+    )
     flat = [{"kind": kind, **record} for kind, records in exported.items() for record in records]
-    st.download_button("Export memory CSV", records_to_csv(flat), "research-memory.csv")
+    st.download_button(
+        "Export memory CSV",
+        records_to_csv(flat),
+        "research-memory.csv",
+        key="_memory_download_csv",
+    )
     markdown = "# Research memory\n\n" + "\n\n".join(
         f"## {kind.replace('_', ' ').title()}\n\n```json\n{json.dumps(records, indent=2)}\n```"
         for kind, records in exported.items()
     )
-    st.download_button("Export memory Markdown", markdown, "research-memory.md")
+    st.download_button(
+        "Export memory Markdown",
+        markdown,
+        "research-memory.md",
+        key="_memory_download_markdown",
+    )
     memory.close()
 
 
