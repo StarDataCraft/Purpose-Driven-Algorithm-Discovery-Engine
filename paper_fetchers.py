@@ -13,7 +13,7 @@ from typing import Callable
 
 import requests
 
-from config import SETTINGS
+from app_settings import SETTINGS
 from models import Paper
 from text_processing import fingerprint, normalized_title
 

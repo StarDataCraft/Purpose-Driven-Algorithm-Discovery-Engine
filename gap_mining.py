@@ -15,7 +15,7 @@ from contradiction_analysis import contradiction_to_signature, detect_contradict
 from coverage_analysis import (
     coverage_gap_to_signature, detect_coverage_gaps, extract_coverage_records,
 )
-from config import SETTINGS
+from app_settings import SETTINGS
 from annotation_schema import SentenceAnnotation
 from sentence_classifier import (
     HybridGapSentenceClassifier, SciBertGapSentenceClassifier,

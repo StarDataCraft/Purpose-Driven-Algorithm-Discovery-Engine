@@ -27,6 +27,8 @@ def test_goal_page_first_render_has_no_session_state_conflict():
     assert app.radio[0].value == "User-defined purpose"
     assert app.text_input[0].value == "online learning"
     assert app.button[0].label == "Discover ML/DL gaps"
+    assert app.session_state["engine_diagnostics"]["requested_mode"] == "lightweight"
+    assert app.session_state["engine_diagnostics"]["active_mode"] == "lightweight"
 
 
 def test_goal_form_submission_persists_domain_state_separately():

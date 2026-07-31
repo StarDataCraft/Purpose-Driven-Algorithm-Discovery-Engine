@@ -13,6 +13,7 @@ from uuid import uuid4
 import streamlit as st
 
 from algorithm_library import load_algorithm_library
+from app_settings import SETTINGS
 from annotation_schema import (
     SentenceAnnotation, annotations_csv, annotations_jsonl, load_annotations,
 )
@@ -22,7 +23,6 @@ from assumption_analysis import (
     load_assumption_registry,
 )
 from config import DEFAULT_DB, FIXTURE_DIR
-from config import SETTINGS
 from contradiction_analysis import detect_contradictory_evidence
 from coverage_analysis import (
     coverage_matrix, detect_coverage_gaps, extract_coverage_records,
@@ -164,6 +164,33 @@ def render_search_diagnostics(
         st.success("Source failures: none")
 
 
+def engine_state_defaults(settings: object) -> dict[str, object]:
+    """Normalize requested mode, including legacy objects retained by hot reload."""
+    warnings = list(getattr(settings, "configuration_warnings", ()))
+    requested = getattr(settings, "gap_engine_mode", None)
+    if requested is None:
+        requested = getattr(
+            settings, "engine_mode",
+            getattr(settings, "requested_mode", "lightweight"),
+        )
+        warnings.append(
+            "A legacy settings object was detected during reload; "
+            "normalized it to the canonical gap_engine_mode schema."
+        )
+    requested = str(requested).strip().casefold()
+    if requested not in {"lightweight", "enhanced", "full"}:
+        warnings.append(
+            f"Invalid requested engine mode {requested!r}; using lightweight."
+        )
+        requested = "lightweight"
+    return {
+        "requested_mode": requested,
+        "active_mode": "lightweight",
+        "model_failures": [],
+        "configuration_warnings": warnings,
+    }
+
+
 def initialize_state() -> None:
     """Initialize all persistent domain and run-state keys in one place."""
     defaults = {
@@ -177,11 +204,7 @@ def initialize_state() -> None:
         "contradictory_gaps": [], "research_clusters": [],
         "retrieval_scores": [],
         "known_solution_results": {},
-        "engine_diagnostics": {
-            "requested_mode": SETTINGS.gap_engine_mode,
-            "active_mode": "lightweight",
-            "model_failures": [],
-        },
+        "engine_diagnostics": engine_state_defaults(SETTINGS),
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -427,6 +450,10 @@ def sidebar() -> str:
             "Expensive modes are controlled by environment variables and "
             "take effect after restart. Lightweight is the deployment-safe default."
         )
+    for warning in st.session_state.engine_diagnostics.get(
+        "configuration_warnings", []
+    ):
+        st.sidebar.warning(warning)
     return st.sidebar.radio("Workflow", PAGES, key="_workflow_page")
 
 
