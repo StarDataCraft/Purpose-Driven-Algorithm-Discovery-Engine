@@ -20,6 +20,18 @@ class Paper:
     sections: dict[str, str] = field(default_factory=dict)
     citations: int = 0
     provenance: list[str] = field(default_factory=list)
+    retrieval_origin: str = ""
+    retrieved_at_utc: str = ""
+    query_ids: list[str] = field(default_factory=list)
+    source_request_id: str = ""
+    cache_key: str = ""
+    fixture_path: str = ""
+    original_source: str = ""
+    source_rank: int = 0
+    sparse_score: float | None = None
+    dense_score: float | None = None
+    hybrid_score: float | None = None
+    provenance_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -102,6 +114,7 @@ class GapSignature:
     classifier_version: str = "rules-v1"
     embedding_version: str = "tfidf-v1"
     evidence_strength_components: dict[str, float] = field(default_factory=dict)
+    research_run_id: str = ""
 
 
 @dataclass
@@ -132,6 +145,7 @@ class MechanismSignature:
     evidence_paper_ids: list[str]
     evidence_count: int
     confidence_score: float
+    research_run_id: str = ""
 
 
 @dataclass
@@ -190,6 +204,7 @@ class AlignmentResult:
     score: float
     rejected: bool
     rejection_reasons: list[str]
+    research_run_id: str = ""
 
 
 @dataclass
@@ -269,6 +284,7 @@ class AlgorithmCandidate:
     novelty_status: str = "insufficient evidence"
     strongest_rejection_reason: str = ""
     kill_criterion: str = ""
+    research_run_id: str = ""
 
 
 @dataclass
@@ -290,6 +306,7 @@ class DirectionFamily:
     evidence_strength: float
     novelty_status: str
     best_first_experiment: str = ""
+    research_run_id: str = ""
 
 
 def to_dict(record: Any) -> dict[str, Any]:

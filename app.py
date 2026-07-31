@@ -31,7 +31,14 @@ from paper_fetchers import (
     fetch_papers_cached_detailed,
 )
 from portfolio import quality_diversity_portfolio
-from query_generation import generate_external_queries, generate_ml_queries
+from query_generation import (
+    detect_algorithm_bindings, generate_external_queries,
+    generate_focused_algorithm_queries, generate_ml_queries,
+    generate_problem_queries, normalize_cross_domain_problem,
+    select_external_domains,
+)
+from research_runs import ResearchRun
+from retrieval_service import retrieve_corpus
 from research_memory import ResearchMemory
 from search_engine import search_candidates
 from signatures import load_mechanism_seeds
@@ -192,6 +199,11 @@ def initialize_state() -> None:
         "contradictory_gaps": [], "research_clusters": [],
         "retrieval_scores": [],
         "known_solution_results": {},
+        "current_research_run": None, "current_external_run": None,
+        "current_ml_corpus": [], "current_gap_results": [],
+        "selected_gap_id": "", "algorithm_bindings": [],
+        "problem_query_audit": None, "focused_query_audit": None,
+        "domain_selections": [], "cross_domain_signature": None,
         "engine_diagnostics": engine_state_defaults(SETTINGS),
     }
     for key, value in defaults.items():
@@ -202,6 +214,8 @@ def apply_discovery_result(result: StructuralDiscoveryResult) -> None:
     """Publish one canonical pipeline result to Streamlit session state."""
     st.session_state.ml_papers = result.papers
     st.session_state.gaps = result.gaps
+    st.session_state.current_ml_corpus = result.papers
+    st.session_state.current_gap_results = result.gaps
     st.session_state.retrieval_scores = result.retrieval_scores
     st.session_state.coverage_records = result.coverage_records
     st.session_state.coverage_gaps = result.coverage_gaps
@@ -218,9 +232,102 @@ def apply_discovery_result(result: StructuralDiscoveryResult) -> None:
     }
 
 
+def invalidate_downstream_for_purpose() -> None:
+    """Prevent a new purpose from displaying results from an older run."""
+    for key, empty in {
+        "selected_gap": None, "selected_gap_id": "", "external_papers": [],
+        "mechanisms": [], "rejected_mechanisms": [], "alignments": [],
+        "direction_families": [], "candidate_portfolio": [],
+        "external_search_diagnostics": None, "current_external_run": None,
+    }.items():
+        st.session_state[key] = empty
+
+
+def invalidate_downstream_for_gap() -> None:
+    for key in (
+        "external_papers", "mechanisms", "rejected_mechanisms", "alignments",
+        "direction_families", "candidate_portfolio",
+    ):
+        st.session_state[key] = []
+    st.session_state.external_search_diagnostics = None
+    st.session_state.current_external_run = None
+
+
+def render_research_run(run: ResearchRun | None, heading: str) -> None:
+    """Render one canonical provenance record without reconstructing mode."""
+    if run is None:
+        return
+    st.subheader(heading)
+    if run.actual_search_mode == "OFFLINE_FIXTURE":
+        st.warning(
+            "OFFLINE DEMONSTRATION — bundled test papers are being used. "
+            "This is not a current literature review."
+        )
+    elif run.actual_search_mode == "FAILED":
+        st.error("Live retrieval failed. No usable literature corpus was produced.")
+    else:
+        st.success(f"{run.actual_search_mode} LITERATURE RUN")
+    st.write({
+        "Run ID": run.run_id,
+        "Requested mode": run.requested_search_mode,
+        "Actual mode": run.actual_search_mode,
+        "Retrieval origin": sorted({
+            origin for source in run.source_results
+            for origin in [source.source_type]
+        }),
+        "Sources attempted": run.sources_attempted,
+        "Live request attempted": run.live_request_attempted,
+        "Live request succeeded": run.live_request_succeeded,
+        "Cache used": run.cache_used,
+        "Cache age seconds": round(run.cache_age_seconds, 1),
+        "Cache TTL seconds": run.cache_ttl_seconds,
+        "Fallback occurred": run.fallback_occurred,
+        "Fallback reason": run.fallback_reason or "none",
+        "Requested publication range": (
+            f"{run.publication_window_requested[0]}–"
+            f"{run.publication_window_requested[1]}"
+        ),
+        "Actual returned publication range": (
+            f"{run.actual_publication_year_min}–{run.actual_publication_year_max}"
+            if run.actual_publication_year_min else "no papers"
+        ),
+        "Retrieved": run.raw_paper_count,
+        "After deduplication": run.deduplicated_paper_count,
+        "Retrieved at UTC": run.created_at_utc,
+        "Fixture paths": run.fixture_paths,
+        "Fixture version": run.fixture_version or "not applicable",
+    })
+    st.dataframe([{
+        "source": item.source, "origin": item.source_type,
+        "attempted": bool(item.request_count or item.cache_hits),
+        "succeeded": item.success_count > 0 or item.cache_hits > 0,
+        "request count": item.request_count,
+        "raw returned": item.raw_returned_count,
+        "unique returned": item.unique_returned_count,
+        "cache hits": item.cache_hits,
+        "failures": item.failure_count,
+        "API status": item.api_status,
+        "failure messages": "; ".join(item.failure_messages),
+        "duration": item.duration_seconds,
+    } for item in run.source_results], use_container_width=True, hide_index=True)
+    if run.source_failures:
+        st.error("Source failures")
+        st.json(run.source_failures)
+    with st.expander("Query strings", expanded=True):
+        for query in [*run.ml_queries, *run.focused_algorithm_queries]:
+            st.code(query)
+
+
 def navigate_to(page: str) -> None:
     """Update the sidebar widget through a pre-rerun button callback."""
     st.session_state["_workflow_page"] = page
+
+
+def choose_search_mode(mode: str, force_fresh: bool = False) -> None:
+    """Return to Step 1 with an explicit retrieval choice."""
+    st.session_state["_purpose_search_mode"] = mode
+    st.session_state["_purpose_force_fresh"] = force_fresh
+    st.session_state["_workflow_page"] = PAGES[0]
 
 
 def candidate_prerequisites() -> dict[str, tuple[bool, str]]:
@@ -440,9 +547,10 @@ def goal_page() -> None:
             key="_purpose_inference",
         )
         algorithm = st.selectbox(
-            "Affected algorithm",
-            sorted(load_algorithm_library()),
+            "Algorithm restriction",
+            ["Evidence-based detection"] + sorted(load_algorithm_library()),
             key="_purpose_algorithm",
+            help="Leave evidence-based detection selected to avoid premature binding.",
         )
         risk = col1.selectbox(
             "Risk tolerance",
@@ -462,24 +570,59 @@ def goal_page() -> None:
             (2022, date.today().year),
             key="_purpose_years",
         )
-        offline = st.checkbox(
-            "Use bundled offline evidence (reproducible demo)",
-            value=True,
-            key="_purpose_offline",
+        search_mode = st.radio(
+            "Search data source",
+            ["Live scholarly APIs", "Cached live results",
+             "Offline demonstration fixtures"],
+            key="_purpose_search_mode",
         )
         force_fresh = st.checkbox(
-            "Force fresh search (bypass local cache)",
+            "Force fresh live search",
             value=False,
             key="_purpose_force_fresh",
-            help="Applies only to live mode. API rate limits and retry delays remain active.",
+        )
+        allow_cache = st.checkbox("Allow cache", value=True, key="_purpose_allow_cache")
+        allow_offline_fallback = st.checkbox(
+            "Allow offline fallback", value=False,
+            key="_purpose_allow_offline_fallback",
+        )
+        openalex_enabled = col1.checkbox(
+            "OpenAlex enabled", value=True, key="_purpose_openalex"
+        )
+        arxiv_enabled = col2.checkbox(
+            "arXiv enabled", value=True, key="_purpose_arxiv"
+        )
+        maximum_per_query = col1.number_input(
+            "Maximum papers per query", 1, 50, 8, key="_purpose_max_per_query"
+        )
+        maximum_total = col2.number_input(
+            "Maximum total papers", 5, 200, 80, key="_purpose_max_total"
         )
         submitted = st.form_submit_button(
             "Discover ML/DL gaps", type="primary"
         )
     if submitted:
-        record = load_algorithm_library()[algorithm]
+        previous_purpose = st.session_state.purpose
+        previous_run = st.session_state.current_research_run
+        same_purpose = bool(
+            previous_purpose
+            and previous_purpose.task == task
+            and previous_purpose.data_type == data_type
+            and previous_purpose.use_case == use_case
+            and previous_purpose.current_failure == failure
+            and previous_purpose.desired_improvement == improvement
+            and previous_purpose.primary_metric == metric
+            and previous_purpose.publication_window == years
+        )
+        restriction = (
+            load_algorithm_library()[algorithm]
+            if algorithm != "Evidence-based detection" else None
+        )
         purpose = PurposeContract(
-            purpose_id=f"purpose:{uuid4().hex[:10]}",
+            purpose_id=(
+                previous_purpose.purpose_id if same_purpose
+                else f"purpose:{uuid4().hex[:10]}"
+            ),
             mode="user" if mode.startswith("User") else "gap_radar",
             use_case=use_case, task=task, data_type=data_type, current_failure=failure,
             desired_improvement=improvement, primary_metric=metric,
@@ -487,40 +630,114 @@ def goal_page() -> None:
             must_not_degrade=[x.strip() for x in preserve.split(",") if x.strip()],
             available_training_information=[x.strip() for x in training.split(",") if x.strip()],
             available_inference_information=[x.strip() for x in inference.split(",") if x.strip()],
-            allowed_algorithm_families=[record.family], risk_tolerance=risk,
+            allowed_algorithm_families=(
+                [restriction.family] if restriction else []
+            ), risk_tolerance=risk,
             preferred_candidate_scale=scale, publication_window=years,
         )
+        if not same_purpose:
+            invalidate_downstream_for_purpose()
         st.session_state.purpose = purpose
-        queries = generate_ml_queries(purpose, record.name)
-        if offline:
-            papers, failures = load_fixture("ml_papers.json"), {}
-            diagnostics = offline_diagnostics(
-                "data/offline_fixtures/ml_papers.json", papers, queries, years
+        broad_queries, broad_audit = generate_problem_queries(purpose)
+        requested_mode = {
+            "Live scholarly APIs": "LIVE",
+            "Cached live results": "CACHE",
+            "Offline demonstration fixtures": "OFFLINE_FIXTURE",
+        }[search_mode]
+        sources = [
+            source for source, enabled in (
+                ("openalex", openalex_enabled), ("arxiv", arxiv_enabled)
+            ) if enabled
+        ]
+        papers, run = retrieve_corpus(
+            purpose, broad_queries, requested_mode=requested_mode,
+            sources=sources, maximum_per_query=int(maximum_per_query),
+            maximum_total=int(maximum_total), allow_cache=allow_cache,
+            allow_offline_fallback=allow_offline_fallback,
+            force_fresh=force_fresh, fixture_loader=lambda: load_fixture(
+                "ml_papers.json"
+            ), fixture_path="data/offline_fixtures/ml_papers.json",
+        )
+        if (
+            force_fresh and run.actual_search_mode == "FAILED"
+            and same_purpose and previous_run
+            and previous_run.actual_search_mode != "FAILED"
+        ):
+            st.session_state.purpose = previous_purpose
+            st.error(
+                "Fresh retrieval failed. The previous successful research run "
+                "was preserved."
             )
-        else:
-            papers, diagnostics = fetch_papers_cached_detailed(
-                " OR ".join(queries[:3]),
-                ["openalex", "arxiv"],
-                30,
-                *years,
-                force_fresh=force_fresh,
+            render_research_run(previous_run, "Preserved ML/DL paper search")
+            return
+        bindings = detect_algorithm_bindings(papers, purpose)
+        focused_queries, focused_audit = generate_focused_algorithm_queries(
+            purpose, bindings, SETTINGS.algorithm_binding_confidence_threshold
+        )
+        run.focused_algorithm_queries = focused_queries
+        if focused_queries and requested_mode != "OFFLINE_FIXTURE" and papers:
+            focused_papers, focused_run = retrieve_corpus(
+                purpose, focused_queries, requested_mode=requested_mode,
+                sources=sources, maximum_per_query=int(maximum_per_query),
+                maximum_total=int(maximum_total), allow_cache=allow_cache,
+                allow_offline_fallback=False, force_fresh=force_fresh,
             )
-            failures = diagnostics.source_failures
-        discovery = discover_structural_gaps(papers, purpose, record.name)
+            papers = deduplicate_papers([*papers, *focused_papers])[:int(maximum_total)]
+            run.source_results.extend(focused_run.source_results)
+            run.source_failures.update(focused_run.source_failures)
+            run.raw_paper_count += focused_run.raw_paper_count
+            run.finalize_from_papers(papers)
+        binding = (
+            bindings[0] if bindings and bindings[0].confidence >=
+            SETTINGS.algorithm_binding_confidence_threshold else None
+        )
+        discovery = discover_structural_gaps(
+            papers, purpose,
+            restriction.name if restriction else (
+                binding.algorithm if binding else "Unspecified"
+            ),
+        )
+        for gap in discovery.gaps:
+            gap.research_run_id = run.run_id
         apply_discovery_result(discovery)
-        st.session_state.ml_search_diagnostics = diagnostics
-        st.session_state.fetch_failures = failures
+        run.structural_gap_count = len(discovery.gaps)
+        st.session_state.current_research_run = run
+        st.session_state.algorithm_bindings = bindings
+        st.session_state.problem_query_audit = broad_audit
+        st.session_state.focused_query_audit = focused_audit
+        st.session_state.ml_search_diagnostics = None
+        st.session_state.fetch_failures = run.source_failures
         st.success(
             f"Mined {len(discovery.gaps)} gap records from "
             f"{len(discovery.papers)} papers."
         )
-    render_search_diagnostics(
-        st.session_state.ml_search_diagnostics, "Latest ML/DL paper search"
+    render_research_run(
+        st.session_state.current_research_run, "Latest ML/DL paper search"
     )
 
 
 def gap_radar_page() -> None:
     st.title("Latest ML/DL gap radar")
+    run = st.session_state.current_research_run
+    render_research_run(run, "Evidence provenance")
+    action_columns = st.columns(4)
+    action_columns[0].button(
+        "Run live search", key="_radar_live",
+        on_click=choose_search_mode, args=("Live scholarly APIs", False),
+    )
+    action_columns[1].button(
+        "Force fresh search", key="_radar_fresh",
+        on_click=choose_search_mode, args=("Live scholarly APIs", True),
+    )
+    action_columns[2].button(
+        "Use cached live corpus", key="_radar_cache",
+        on_click=choose_search_mode, args=("Cached live results", False),
+    )
+    action_columns[3].button(
+        "Load offline demonstration", key="_radar_fixture",
+        on_click=choose_search_mode,
+        args=("Offline demonstration fixtures", False),
+    )
     st.info(
         f"Gap engine mode: {st.session_state.engine_diagnostics['active_mode'].upper()} · "
         f"requested: {st.session_state.engine_diagnostics['requested_mode'].upper()}"
@@ -529,9 +746,20 @@ def gap_radar_page() -> None:
     if not gaps:
         st.info("Create a purpose contract and discover gaps first.")
         return
-    render_search_diagnostics(
-        st.session_state.ml_search_diagnostics, "ML/DL paper search provenance"
-    )
+    if run and run.actual_search_mode != "OFFLINE_FIXTURE" and len(
+        st.session_state.ml_papers
+    ) < SETTINGS.minimum_live_corpus_size:
+        st.warning(
+            "Insufficient live literature coverage for reliable structural gap "
+            f"detection. The current corpus contains {len(st.session_state.ml_papers)} "
+            "papers. Explicit gaps remain exploratory; coverage and trend claims "
+            "must be treated as provisional."
+        )
+    if st.session_state.algorithm_bindings:
+        st.subheader("Evidence-based algorithm binding")
+        st.dataframe([
+            asdict(item) for item in st.session_state.algorithm_bindings
+        ], use_container_width=True)
     st.json(corpus_summary(st.session_state.ml_papers, gaps))
     diagnostics = st.session_state.engine_diagnostics
     st.write({
@@ -571,7 +799,12 @@ def gap_radar_page() -> None:
         "Select an evidence-backed gap", labels, key="_gap_radar_selection"
     )
     if st.button("Use selected gap", type="primary", key="_gap_radar_submit"):
+        if st.session_state.selected_gap_id != labels[chosen].gap_id:
+            invalidate_downstream_for_gap()
         st.session_state.selected_gap = labels[chosen]
+        st.session_state.selected_gap_id = labels[chosen].gap_id
+        if run:
+            run.selected_gap_id = labels[chosen].gap_id
         st.success("Gap selected. Continue to evidence or external mechanism search.")
     st.dataframe([{
         "gap": g.title, "type": g.structural_gap_subtype or g.gap_type,
@@ -683,11 +916,33 @@ def mechanism_page() -> None:
     if not gap:
         st.info("Select a verified gap first.")
         return
-    queries = generate_external_queries(gap)
+    signature = normalize_cross_domain_problem(gap)
+    selections = select_external_domains(
+        signature, SETTINGS.maximum_external_domains
+    )
+    selected_domains = [item.domain for item in selections if item.selected]
+    queries = generate_external_queries(gap, selected_domains)
+    st.session_state.cross_domain_signature = signature
+    st.session_state.domain_selections = selections
     st.session_state.external_queries = queries
-    st.json(queries)
-    offline = st.checkbox(
-        "Use bundled external evidence", value=True, key="_mechanism_offline"
+    st.subheader("Normalized cross-domain problem signature")
+    st.json(asdict(signature))
+    st.subheader("Ranked external domains")
+    st.dataframe([asdict(item) for item in selections], use_container_width=True)
+    st.subheader("Discipline-native query translations")
+    for domain, domain_queries in queries.items():
+        with st.expander(domain, expanded=True):
+            for query in domain_queries:
+                st.code(query)
+    st.caption(
+        "Rejected raw query candidates: none. Queries are generated directly "
+        "from controlled discipline profiles and still pass deterministic validation."
+    )
+    external_mode = st.radio(
+        "External search data source",
+        ["Live scholarly APIs", "Cached live results",
+         "Offline demonstration fixtures"],
+        key="_mechanism_search_mode",
     )
     force_fresh = st.checkbox(
         "Force fresh search (bypass local cache)",
@@ -698,59 +953,62 @@ def mechanism_page() -> None:
     if st.button(
         "Fetch and extract mechanisms", type="primary", key="_mechanism_fetch"
     ):
-        papers = load_fixture("external_papers.json") if offline else []
-        failures = {}
-        diagnostic_runs: list[FetchDiagnostics] = []
-        if not offline:
-            for domain, domain_queries in queries.items():
-                fetched, run_diagnostics = fetch_papers_cached_detailed(
-                    domain_queries[0],
-                    ["openalex", "arxiv"],
-                    6,
-                    *st.session_state.purpose.publication_window,
-                    force_fresh=force_fresh,
-                )
-                for paper in fetched:
-                    paper.domain = domain
-                papers.extend(fetched)
-                run_diagnostics.source_failures = {
-                    f"{domain}:{key}": value
-                    for key, value in run_diagnostics.source_failures.items()
-                }
-                diagnostic_runs.append(run_diagnostics)
-                failures.update(run_diagnostics.source_failures)
-            papers = deduplicate_papers(papers)
+        requested_mode = {
+            "Live scholarly APIs": "LIVE",
+            "Cached live results": "CACHE",
+            "Offline demonstration fixtures": "OFFLINE_FIXTURE",
+        }[external_mode]
+        indexed_external_queries = [
+            (domain, query) for domain, domain_queries in queries.items()
+            for query in domain_queries
+        ]
+        external_query_list = [query for _, query in indexed_external_queries]
+        papers, external_run = retrieve_corpus(
+            st.session_state.purpose, external_query_list,
+            requested_mode=requested_mode,
+            sources=["openalex", "arxiv"], maximum_per_query=6,
+            maximum_total=60, allow_cache=True,
+            allow_offline_fallback=False, force_fresh=force_fresh,
+            fixture_loader=lambda: load_fixture("external_papers.json"),
+            fixture_path="data/offline_fixtures/external_papers.json",
+        )
+        external_run.external_queries_by_domain = queries
+        current_run = st.session_state.current_research_run
+        if current_run:
+            external_run.parent_run_id = current_run.run_id
+            external_run.run_id = current_run.run_id
+            current_run.external_queries_by_domain = queries
+            current_run.stage_records["external_retrieval"] = {
+                "actual_search_mode": external_run.actual_search_mode,
+                "paper_count": len(papers),
+                "sources": external_run.sources_attempted,
+            }
+        for paper in papers:
+            indices = [
+                int(query_id.split(":", 1)[1])
+                for query_id in paper.query_ids if query_id.startswith("q:")
+            ]
+            if indices:
+                paper.domain = indexed_external_queries[indices[0]][0]
         mechanisms, rejected = extract_mechanisms(papers)
         mechanism_fallback = not mechanisms
         if not mechanisms:
             mechanisms = load_mechanism_seeds()
-        if offline:
-            diagnostics = offline_diagnostics(
-                "data/offline_fixtures/external_papers.json",
-                papers,
-                [query for domain_queries in queries.values() for query in domain_queries],
-                st.session_state.purpose.publication_window,
-            )
-            diagnostics.fallback_occurred = mechanism_fallback
-            diagnostics.fallback_reason = (
+        for mechanism in mechanisms:
+            mechanism.research_run_id = external_run.run_id
+        external_run.mechanism_count = len(mechanisms)
+        if mechanism_fallback:
+            external_run.warnings.append(
                 "No mechanism was extracted; curated mechanism seeds were used."
-                if mechanism_fallback else ""
-            )
-        else:
-            diagnostics = combine_diagnostics(
-                diagnostic_runs,
-                len(papers),
-                mechanism_fallback,
-                "No mechanism was extracted; curated mechanism seeds were used."
-                if mechanism_fallback else "",
             )
         st.session_state.external_papers = papers
-        st.session_state.external_search_diagnostics = diagnostics
+        st.session_state.current_external_run = external_run
+        st.session_state.external_search_diagnostics = None
         st.session_state.mechanisms = cross_domain_only(mechanisms)
         st.session_state.rejected_mechanisms = rejected
-        st.session_state.fetch_failures.update(failures)
-    render_search_diagnostics(
-        st.session_state.external_search_diagnostics,
+        st.session_state.fetch_failures.update(external_run.source_failures)
+    render_research_run(
+        st.session_state.current_external_run,
         "Latest external paper search",
     )
     st.dataframe([{
@@ -770,6 +1028,9 @@ def alignment_page() -> None:
         st.info("Select a gap and extract mechanisms first.")
         return
     results = [align(gap, mechanism, st.session_state.purpose) for mechanism in mechanisms]
+    current_run = st.session_state.current_research_run
+    for result in results:
+        result.research_run_id = current_run.run_id if current_run else ""
     st.session_state.alignments = results
     st.dataframe([{
         "mechanism": result.mechanism_id, "score": round(result.score, 2),
@@ -804,7 +1065,12 @@ def generate_candidates() -> dict[str, object]:
     finally:
         memory.close()
     portfolio = quality_diversity_portfolio(result.candidates, 12)
+    current_run = st.session_state.current_research_run
+    for candidate in portfolio:
+        candidate.research_run_id = current_run.run_id if current_run else ""
     families = create_direction_families(portfolio)
+    for family in families:
+        family.research_run_id = current_run.run_id if current_run else ""
     diagnostics = summarize_rejections(portfolio, result.rejected_paths)
     st.session_state.candidate_portfolio = portfolio
     st.session_state.direction_families = families
@@ -1106,6 +1372,15 @@ def memory_page() -> None:
     st.title("Research memory")
     memory = ResearchMemory(DEFAULT_DB)
     if st.button("Save current run", key="_memory_save"):
+        run = st.session_state.current_research_run
+        if run:
+            run.mechanism_count = len(st.session_state.mechanisms)
+            run.candidate_count = len(st.session_state.candidate_portfolio)
+            memory.save("research_run", run.run_id, run)
+        for paper in [
+            *st.session_state.ml_papers, *st.session_state.external_papers
+        ]:
+            memory.save("paper", paper.paper_id, paper)
         for gap in st.session_state.gaps:
             memory.save("gap", gap.gap_id, gap)
         for mechanism in st.session_state.mechanisms:
@@ -1145,11 +1420,15 @@ def memory_page() -> None:
             fingerprint = "|".join(str(rejection.get(key, ""))
                                    for key in ("gap", "mechanism", "operator"))
             memory.remember_failure(fingerprint, "weak evidence", json.dumps(rejection))
-        st.success("Saved gaps, mechanisms, families, candidates, and failures.")
-    tabs = st.tabs(["Gaps", "Mechanisms", "Families", "Candidates", "Failures"])
-    for tab, kind in zip(tabs[:4], ["gap", "mechanism", "direction_family", "candidate"]):
+        st.success("Saved run provenance, papers, scientific records, and failures.")
+    tabs = st.tabs([
+        "Runs", "Gaps", "Mechanisms", "Families", "Candidates", "Failures"
+    ])
+    for tab, kind in zip(tabs[:5], [
+        "research_run", "gap", "mechanism", "direction_family", "candidate"
+    ]):
         tab.json(memory.list(kind))
-    tabs[4].json(memory.failures())
+    tabs[5].json(memory.failures())
     exported = {
         kind: memory.list(kind) for kind in ("gap", "mechanism", "direction_family", "candidate")
     }

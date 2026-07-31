@@ -254,3 +254,44 @@ The system proposes **testable algorithm research directions**. It does not prov
 candidate is genuinely novel, mathematically correct, superior, or publication-ready.
 Novelty and value require a careful literature review, implementation, experiments, and
 peer evaluation.
+
+## Literature provenance and search modes
+
+The interactive default is **Live scholarly APIs** with OpenAlex and arXiv
+enabled. Every action creates one typed `ResearchRun`; Steps 2–10 read that
+record instead of reconstructing provenance from widget values.
+
+- `LIVE`: this run received at least one valid scholarly API result.
+- `CACHE`: every paper came from a cache created by a successful live request.
+- `MIXED`: current paper-level origins combine live, cache, or authorized fixture data.
+- `OFFLINE_FIXTURE`: every paper is a bundled demonstration record.
+- `FAILED`: no usable corpus was produced.
+
+Explicit fixture mode is not fallback. Fixture fallback occurs only after all
+selected live sources fail and the user enables **Allow offline fallback**.
+Fixture runs are labeled **DEMONSTRATION ONLY** and are never written to the
+live cache. Cache TTL is 86,400 seconds. **Force fresh live search** bypasses
+cache reads while preserving rate limits; a failed refresh does not overwrite
+the prior Streamlit run.
+
+The UI separates requested and actual publication ranges and shows per-source
+request, raw-result, unique-result, cache-hit, failure, and duration counts.
+Each paper retains retrieval origin, timestamp, query/request IDs, cache or
+fixture identity, ranking scores, and deduplication provenance history.
+
+ML retrieval uses broad task/failure/recovery queries first. Algorithm-focused
+queries are generated only after paper evidence produces a confidence-scored
+binding. Recurring-drift goals expand to recovery time, adaptation delay,
+post-drift regret, recurrence recognition, forgetting, memory, and stability
+metrics.
+
+External search converts a selected gap into a typed cross-domain problem
+signature and ranks relevant disciplines. Controlled translation profiles
+produce short native queries for immunology, ecology, control theory,
+neuroscience, dynamical systems, physics, biology, complex systems, operations
+research, and mechanism design. Raw ML metrics are not copied into unrelated
+disciplines.
+
+To verify a saved candidate, open Research Memory and inspect its
+`research_run_id`, then inspect the matching run’s actual mode, sources,
+paper IDs, queries, and stage records.

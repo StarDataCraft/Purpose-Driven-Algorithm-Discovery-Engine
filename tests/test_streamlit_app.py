@@ -9,10 +9,16 @@ from streamlit.testing.v1 import AppTest
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 CANDIDATE_PAGE = "7 · Candidate algorithms"
+OFFLINE_MODE = "Offline demonstration fixtures"
 
 
 def open_candidate_page(app: AppTest) -> AppTest:
     app.radio(key="_workflow_page").set_value(CANDIDATE_PAGE).run()
+    return app
+
+
+def select_offline_mode(app: AppTest) -> AppTest:
+    app.radio(key="_purpose_search_mode").set_value(OFFLINE_MODE)
     return app
 
 
@@ -25,6 +31,11 @@ def test_goal_page_first_render_has_no_session_state_conflict():
     assert not app.exception
     assert app.title[0].value == "Purpose contract"
     assert app.radio[0].value == "User-defined purpose"
+    assert app.radio(key="_purpose_search_mode").value == "Live scholarly APIs"
+    assert app.checkbox(key="_purpose_allow_cache").value is True
+    assert app.checkbox(key="_purpose_allow_offline_fallback").value is False
+    assert app.checkbox(key="_purpose_openalex").value is True
+    assert app.checkbox(key="_purpose_arxiv").value is True
     assert app.text_input[0].value == "online learning"
     assert app.button[0].label == "Discover ML/DL gaps"
     assert app.session_state["engine_diagnostics"]["requested_mode"] == "lightweight"
@@ -36,14 +47,83 @@ def test_goal_form_submission_persists_domain_state_separately():
     app = AppTest.from_file(str(APP_PATH), default_timeout=30)
     app.run()
 
+    select_offline_mode(app)
     app.button[0].click().run()
 
     assert not app.exception
     assert app.session_state["purpose"] is not None
     assert app.session_state["purpose"].task == "online learning"
     assert app.session_state["_purpose_task"] == "online learning"
-    assert app.session_state["ml_search_diagnostics"].search_mode == "OFFLINE FIXTURE"
-    assert app.session_state["ml_search_diagnostics"].returned_by_source
+    assert app.session_state["current_research_run"].actual_search_mode == "OFFLINE_FIXTURE"
+    assert app.session_state["current_research_run"].source_results[0].raw_returned_count == 5
+
+
+def test_new_purpose_invalidates_downstream_state():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
+    app.session_state["mechanisms"] = ["stale"]
+    app.session_state["candidate_portfolio"] = ["stale"]
+    select_offline_mode(app)
+    app.button[0].click().run()
+
+    assert not app.exception
+    assert app.session_state["mechanisms"] == []
+    assert app.session_state["candidate_portfolio"] == []
+    assert app.session_state["current_research_run"].purpose_contract_id == (
+        app.session_state["purpose"].purpose_id
+    )
+
+
+def test_mocked_live_run_displays_live_and_persists_across_rerun():
+    wrapper = """
+import app as target
+from models import Paper
+from research_runs import ResearchRun, SourceRetrievalResult, paper_provenance
+
+def mocked_retrieve(purpose, queries, **kwargs):
+    papers = [
+        Paper(
+            f"mock:{index}", f"Random Forest recurring drift study {index}",
+            "Random forest remains challenging under recurring concept drift. "
+            "Recovery after recurrence has adaptation delay.",
+            2025, "openalex"
+        )
+        for index in range(5)
+    ]
+    for index, paper in enumerate(papers):
+        paper_provenance(
+            paper, "live_openalex", f"q:{index}", f"request:{index}",
+            rank=index + 1,
+        )
+    run = ResearchRun.create(
+        purpose.purpose_id, "LIVE", "lightweight",
+        purpose.publication_window,
+    )
+    run.live_request_attempted = True
+    run.raw_paper_count = len(papers)
+    run.ml_queries = list(queries)
+    run.source_results = [SourceRetrievalResult(
+        source="openalex", source_type="scholarly_api",
+        queries_attempted=list(queries), request_count=1, success_count=1,
+        raw_returned_count=5, unique_returned_count=5,
+    )]
+    run.finalize_from_papers(papers)
+    return papers, run
+
+target.retrieve_corpus = mocked_retrieve
+target.main()
+"""
+    app = AppTest.from_string(wrapper, default_timeout=30).run()
+    app.button[0].click().run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["current_research_run"].actual_search_mode == "LIVE"
+    run_id = app.session_state["current_research_run"].run_id
+    assert any("LIVE LITERATURE RUN" in success.value for success in app.success)
+
+    app.run()
+
+    assert app.session_state["current_research_run"].run_id == run_id
+    assert app.session_state["current_research_run"].actual_search_mode == "LIVE"
 
 
 def test_candidate_page_without_prerequisites_is_actionable():
@@ -63,6 +143,7 @@ def test_candidate_page_without_prerequisites_is_actionable():
 
 def test_candidate_end_to_end_offline_renders_and_persists():
     app = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
+    select_offline_mode(app)
     app.button[0].click().run()
     open_candidate_page(app)
 
@@ -136,6 +217,7 @@ def test_candidate_failure_displays_stage_and_error():
 
 def test_gap_radar_renders_structural_views_from_fixture():
     app = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
+    select_offline_mode(app)
     app.button[0].click().run()
     app.radio(key="_workflow_page").set_value(
         "2 · Latest ML/DL gap radar"
@@ -155,10 +237,31 @@ def test_gap_radar_renders_structural_views_from_fixture():
         gap.structural_gap_subtype == "assumption_mismatch"
         for gap in app.session_state["gaps"]
     )
+    assert any(
+        "OFFLINE DEMONSTRATION" in warning.value for warning in app.warning
+    )
+    source_table = app.dataframe[0].value
+    assert int(source_table.iloc[0]["raw returned"]) == 5
+    assert int(source_table.iloc[0]["unique returned"]) == 5
 
+    app.session_state["mechanisms"] = ["stale mechanism"]
+    app.session_state["candidate_portfolio"] = ["stale candidate"]
     app.button(key="_gap_radar_submit").click().run()
+    assert app.session_state["mechanisms"] == []
+    assert app.session_state["candidate_portfolio"] == []
     app.radio(key="_workflow_page").set_value("3 · Gap evidence").run()
 
     assert not app.exception
     assert app.title[0].value == "Gap evidence"
     assert app.session_state["selected_gap"] is not None
+
+    app.radio(key="_workflow_page").set_value(
+        "4 · External mechanism search"
+    ).run()
+    assert not app.exception
+    assert "Normalized cross-domain problem signature" in [
+        item.value for item in app.subheader
+    ]
+    query_text = " ".join(item.value for item in app.code).casefold()
+    assert "stationary distribution" not in query_text
+    assert "online accuracy" not in query_text

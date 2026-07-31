@@ -90,3 +90,23 @@ These do not violate the product boundary but must remain visible:
 No checkpoint was trained in this task because the seed dataset is intentionally too
 small for a credible scientific performance claim. The command is implemented for a
 future adequately sized adjudicated dataset.
+
+## Retrieval and translation foundation
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Live-first default | PASS | Step 1 source radio defaults to Live scholarly APIs; OpenAlex/arXiv default enabled. |
+| Actual mode from provenance | PASS | `ResearchRun.finalize_from_papers`; mocked LIVE/CACHE/FAILED/FIXTURE tests. |
+| Explicit fixture versus fallback | PASS | `retrieve_corpus` requires explicit mode or authorized fallback and records reason. |
+| Paper-level provenance | PASS | Retrieval origin/time, query/request/cache/fixture/rank fields plus merged history. |
+| Complete source counts | PASS | `SourceRetrievalResult` and UI table include raw/unique/cache/failure/duration. |
+| Requested/actual year ranges | PASS | Separate `ResearchRun` fields and Step 2 display. |
+| Two-stage queries | PASS | `generate_problem_queries`, binding detection, focused queries, production integration. |
+| No unsupported AdaBoost binding | PASS | Evidence or explicit family restriction required; query regression test. |
+| Recovery metric expansion | PASS | Controlled recurring-drift metric family and tests. |
+| Query quality controls | PASS | Length, malformed phrase, unsupported algorithm, information and duplicate gates. |
+| Native external translation | PASS | Ten deterministic profiles; recurring-drift translation tests. |
+| Relevant domain selection | PASS | Role-based scoring selects five high-correspondence domains by default. |
+| Shared run identity | PASS | External stage and candidates retain the originating `run_id`. |
+| Research-memory provenance | PASS | Runs and papers persist alongside scientific records and candidates. |
+| No generative LLM | PASS | Controlled vocabularies, rules, TF-IDF and optional local encoders only. |

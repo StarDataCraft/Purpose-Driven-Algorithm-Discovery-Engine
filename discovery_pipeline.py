@@ -82,6 +82,13 @@ def discover_structural_gaps(
             papers, " ".join(lexical_queries), semantic_query, None
         ) if papers else ([], [])
         dense = None
+    scores_by_paper = {score.paper_id: score for score in retrieval_scores}
+    for paper in ranked_papers:
+        score = scores_by_paper.get(paper.paper_id)
+        if score:
+            paper.sparse_score = score.sparse_score
+            paper.dense_score = score.dense_score
+            paper.hybrid_score = score.fusion_score
 
     limited_papers = ranked_papers[:settings.transformer_max_papers]
     records = extract_coverage_records(limited_papers, purpose)

@@ -68,3 +68,35 @@ UI support bounded human review and JSONL/CSV export.
 Research-memory schema version 2 adds generic structural/model records without removing
 legacy tables. Runtime DBs and embedding/model caches are ignored. Fetch, embedding,
 sentence, graph, annotation, and cache sizes are bounded in `config.py`.
+
+## Canonical retrieval and provenance
+
+`retrieval_service.retrieve_corpus` is the live/cache/fixture mode resolver.
+It writes retrieval events onto `Paper` records and then derives actual mode
+from those events. `ResearchRun` and `SourceRetrievalResult` are the shared
+typed contracts for all UI pages and persisted research memory.
+
+The production literature path is:
+
+`PurposeContract → problem queries → live/cache retrieval → deduplication →`
+`sparse relevance → clustering → algorithm binding → focused retrieval →`
+`structural discovery`.
+
+The external path continues:
+
+`selected GapSignature → CrossDomainProblemSignature → ranked domains →`
+`native query profiles → external retrieval → mechanism extraction`.
+
+Query validation bounds length, removes duplicates, and rejects malformed or
+unsupported terms. Algorithm bindings record mentions, paper/source support,
+relevance, method, confidence, and evidence. Low-confidence evidence stays at
+family or `Unspecified` level.
+
+The live response cache has a one-day TTL and stores successful live results
+only. Force-fresh bypasses reads but never rate limiting. A failed new action
+does not mutate the previously successful session-state run.
+
+Purpose submission invalidates all downstream stage state. Selecting a
+different gap invalidates external papers, mechanisms, alignments, direction
+families, and candidates. Candidates and external stages retain the parent
+research run ID.

@@ -32,7 +32,11 @@ class Settings:
     clustering_threshold: float = 0.55
     semantic_deduplication_threshold: float = 0.88
     minimum_coverage_support: int = 3
+    minimum_live_corpus_size: int = 8
     maximum_unknown_ratio: float = 0.45
+    algorithm_binding_confidence_threshold: float = 0.45
+    maximum_external_domains: int = 5
+    maximum_query_length: int = 110
     max_embedding_cache_records: int = 5000
     max_annotation_rows: int = 1000
     scibert_checkpoint: str = ""

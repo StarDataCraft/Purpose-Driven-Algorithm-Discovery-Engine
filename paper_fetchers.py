@@ -137,6 +137,11 @@ def deduplicate_papers(papers: list[Paper]) -> list[Paper]:
         existing = next((seen[key] for key in keys if key and key in seen), None)
         if existing:
             existing.provenance = sorted(set(existing.provenance + paper.provenance))
+            existing.query_ids = sorted(set(existing.query_ids + paper.query_ids))
+            existing.provenance_history.extend(
+                item for item in paper.provenance_history
+                if item not in existing.provenance_history
+            )
             continue
         for key in keys:
             if key:
