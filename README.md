@@ -295,3 +295,17 @@ disciplines.
 To verify a saved candidate, open Research Memory and inspect its
 `research_run_id`, then inspect the matching run’s actual mode, sources,
 paper IDs, queries, and stage records.
+
+## Benchmark-driven quality evaluation
+
+The optional **Research Tools → Quality Evaluation** panel evaluates the
+production pipeline against three versioned tasks: recurring drift,
+training–inference missingness shift, and dynamic cluster lifecycle. It shows
+retrieval metrics, query contribution, evidence/gap audits, binding and
+known-solution audits, external-query and mechanism quality, typed alignment,
+the ten-component candidate rubric, stage funnel, and error distribution.
+
+Deterministic CI evaluation uses conspicuously synthetic papers and labels.
+They test measurement behavior, not scientific performance. Curated reference
+slots are empty until a reviewer verifies real identifiers. See
+`EVALUATION_GUIDE.md`, `ERROR_TAXONOMY.md`, and `evaluation/reports/`.

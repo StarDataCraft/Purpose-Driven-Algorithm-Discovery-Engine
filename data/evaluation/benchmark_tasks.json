@@ -1,0 +1,59 @@
+{
+  "version": "1.0.0",
+  "tasks": [
+    {
+      "task_id": "recurring_concept_drift",
+      "version": "1.0.0",
+      "title": "Recurring concept drift and slow recovery",
+      "purpose": {
+        "use_case": "adaptive decision support",
+        "task": "online classification",
+        "data_type": "tabular streams",
+        "current_failure": "slow recovery under recurring concept drift",
+        "desired_improvement": "recognize returning concepts and reactivate prior expertise",
+        "primary_metric": "recovery time"
+      },
+      "target_concepts": ["recurring concept drift", "concept recurrence", "post-drift recovery", "adaptation delay", "concept history reuse", "delayed labels"],
+      "algorithm_families": ["adaptive random forest", "online ensemble", "streaming decision tree", "online boosting", "mixture of experts"],
+      "metrics": ["recovery time", "adaptation delay", "prequential accuracy", "worst-window accuracy", "post-drift regret", "forgetting", "memory overhead"],
+      "assumptions": ["no recurring contexts", "immediate labels", "fixed ensemble structure", "no reusable historical state"],
+      "known_solution_queries": ["recurring concept drift methods", "context recurrence detection", "concept repository model reuse", "recurring ensemble adaptation"]
+    },
+    {
+      "task_id": "missingness_shift",
+      "version": "1.0.0",
+      "title": "Training–inference missingness shift",
+      "purpose": {
+        "use_case": "robust tabular prediction",
+        "task": "tabular classification",
+        "data_type": "partially observed tabular data",
+        "current_failure": "training inference missingness shift",
+        "desired_improvement": "remain calibrated when feature availability changes",
+        "primary_metric": "worst-case AUROC"
+      },
+      "target_concepts": ["missingness shift", "train-test missingness mismatch", "MNAR", "inference-time missing features", "feature availability shift", "informative missingness"],
+      "algorithm_families": ["tree ensemble", "probabilistic model", "feature routing", "missingness-aware neural network", "mixture of experts"],
+      "metrics": ["AUROC", "calibration", "expected calibration error", "robustness curve", "inference latency", "feature acquisition cost"],
+      "assumptions": ["complete inference features", "identical train test missingness", "missingness independent of target", "stable feature availability"],
+      "known_solution_queries": ["missingness-aware prediction", "robust prediction missing features", "train-test missingness shift", "MNAR classifier", "feature-dropout robustness"]
+    },
+    {
+      "task_id": "dynamic_clustering",
+      "version": "1.0.0",
+      "title": "Dynamic cluster birth and death under heterogeneous density",
+      "purpose": {
+        "use_case": "evolving population monitoring",
+        "task": "streaming clustering",
+        "data_type": "nonstationary heterogeneous-density streams",
+        "current_failure": "cluster birth death split merge under heterogeneous density",
+        "desired_improvement": "manage component lifecycle without fixed K",
+        "primary_metric": "cluster recovery delay"
+      },
+      "target_concepts": ["dynamic clustering", "cluster birth and death", "split-merge clustering", "heterogeneous density", "changing number of clusters", "cluster lifecycle"],
+      "algorithm_families": ["K-means", "Gaussian mixture model", "DBSCAN", "density-based clustering", "Bayesian nonparametric mixture"],
+      "metrics": ["ARI", "NMI", "cluster recovery delay", "split merge detection accuracy", "cluster stability", "runtime", "memory growth"],
+      "assumptions": ["fixed K", "static cluster population", "spherical geometry", "homogeneous density", "no component lifecycle"],
+      "known_solution_queries": ["evolving clustering", "split-merge mixture", "streaming clustering", "nonparametric mixture model", "dynamic cluster lifecycle"]
+    }
+  ]
+}

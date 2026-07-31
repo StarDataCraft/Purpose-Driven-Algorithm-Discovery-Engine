@@ -100,3 +100,23 @@ Purpose submission invalidates all downstream stage state. Selecting a
 different gap invalidates external papers, mechanisms, alignments, direction
 families, and candidates. Candidates and external stages retain the parent
 research run ID.
+
+## Evaluation layer
+
+The `evaluation/` package observes the existing production pipeline; it does
+not replace it. Versioned tasks and optional human annotations feed:
+
+`retrieval metrics → query contribution → evidence/gap audits → coverage and`
+`mismatch audits → binding/known solutions → external queries → mechanisms →`
+`typed alignment → candidate rubric → stage funnel → error distribution`.
+
+Reports include run/commit/task/query/domain/annotation versions, corpus
+fingerprint, random seed, active model status, and thresholds. Research Memory
+stores optional `HumanReview` records separately from generated artifacts.
+
+The only production repair justified by the initial synthetic baseline adds a
+controlled structural-topology feature to alignment. Shared words alone still
+cannot create a strong match; topology, compatible modification slot, evidence,
+and absence of information conflicts are required. Two evaluator corrections
+recognize aggregation/objective modifications and avoid calling an
+unannotated insufficient search a known-solution miss.

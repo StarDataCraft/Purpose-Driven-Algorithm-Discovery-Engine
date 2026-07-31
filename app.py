@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import csv
+import io
 from collections import Counter
 from dataclasses import asdict
 from datetime import date, datetime, timezone
@@ -44,6 +46,11 @@ from search_engine import search_candidates
 from signatures import load_mechanism_seeds
 from trend_analysis import trend_indicators
 from weak_supervision import GapLabel, label_sentence
+from evaluation.benchmark_tasks import load_benchmark_tasks
+from evaluation.report_generation import report_json, report_markdown
+from evaluation.run_benchmark import run_offline_benchmark
+from evaluation.schemas import HumanReview
+from research_runs import utc_now
 
 PAGES = [
     "1 · Goal setup", "2 · Latest ML/DL gap radar", "3 · Gap evidence",
@@ -204,6 +211,7 @@ def initialize_state() -> None:
         "selected_gap_id": "", "algorithm_bindings": [],
         "problem_query_audit": None, "focused_query_audit": None,
         "domain_selections": [], "cross_domain_signature": None,
+        "quality_evaluation_report": None,
         "engine_diagnostics": engine_state_defaults(SETTINGS),
     }
     for key, value in defaults.items():
@@ -448,7 +456,133 @@ def sidebar() -> str:
         "configuration_warnings", []
     ):
         st.sidebar.warning(warning)
+    with st.sidebar.expander("Research Tools"):
+        st.checkbox(
+            "Quality Evaluation", key="_show_quality_evaluation",
+            help="Optional benchmark and human-review tools.",
+        )
     return st.sidebar.radio("Workflow", PAGES, key="_workflow_page")
+
+
+def quality_evaluation_panel() -> None:
+    """Optional benchmark and human-review surface outside the ten-step flow."""
+    st.divider()
+    st.header("Quality Evaluation")
+    st.warning(
+        "Automated quality metrics are meaningful only against reviewed "
+        "annotations. Synthetic offline labels are CI fixtures, not ground truth."
+    )
+    tasks = load_benchmark_tasks()
+    task_id = st.selectbox(
+        "Benchmark task", list(tasks), key="_quality_task",
+        format_func=lambda key: tasks[key].title,
+    )
+    if st.button("Run deterministic offline evaluation", key="_quality_run"):
+        with st.spinner("Evaluating production pipeline…"):
+            st.session_state.quality_evaluation_report = run_offline_benchmark(
+                tasks[task_id]
+            )
+    report = st.session_state.quality_evaluation_report
+    if report:
+        st.subheader("Retrieval review")
+        st.json(report.retrieval_metrics)
+        st.subheader("Query contribution")
+        st.dataframe(
+            [asdict(item) for item in report.query_contributions],
+            use_container_width=True,
+        )
+        review_tabs = st.tabs([
+            "Gap review", "Coverage and mismatch", "Bindings and solutions",
+            "External and mechanisms", "Alignments and candidates",
+        ])
+        review_tabs[0].dataframe([asdict(item) for item in report.gap_audits])
+        review_tabs[1].dataframe([
+            asdict(item) for item in [
+                *report.coverage_audits, *report.mismatch_audits
+            ]
+        ])
+        review_tabs[2].dataframe([
+            asdict(item) for item in [
+                *report.binding_audits, *report.known_solution_audits
+            ]
+        ])
+        review_tabs[3].dataframe([
+            asdict(item) for item in [
+                *report.external_query_audits, *report.mechanism_audits
+            ]
+        ])
+        review_tabs[4].dataframe([
+            asdict(item) for item in [
+                *report.alignment_audits, *report.candidate_audits
+            ]
+        ])
+        st.subheader("Stage funnel")
+        st.write({"counts": asdict(report.funnel), "conversion rates": report.funnel.rates()})
+        st.subheader("Error distribution and dominant bottleneck")
+        st.write(report.error_counts)
+        st.info(f"Dominant bottleneck: {report.dominant_bottleneck}")
+        st.subheader("Before/after comparison")
+        st.json(report.before_after)
+        st.download_button(
+            "Export evaluation JSON", report_json(report),
+            f"{report.task_id}-evaluation.json", key="_quality_export_json",
+        )
+        st.download_button(
+            "Export evaluation Markdown", report_markdown(report),
+            f"{report.task_id}-evaluation.md", key="_quality_export_md",
+        )
+    with st.expander("Human review annotation"):
+        item_id = st.text_input("Item ID", key="_quality_review_item")
+        item_type = st.selectbox(
+            "Item type", [
+                "paper", "gap", "coverage_gap", "assumption_mismatch",
+                "algorithm_binding", "external_query", "mechanism",
+                "alignment", "candidate",
+            ], key="_quality_review_type",
+        )
+        label = st.text_input("Review label", key="_quality_review_label")
+        reviewer = st.text_input("Reviewer", key="_quality_reviewer")
+        notes = st.text_area("Notes and uncertainty", key="_quality_notes")
+        uncertain = st.checkbox("Uncertain", key="_quality_uncertain")
+        if st.button("Save review", key="_quality_save_review"):
+            run = st.session_state.current_research_run
+            review = HumanReview(
+                run.run_id if run else "evaluation-only", item_id, item_type,
+                task_id, label, {}, reviewer or "anonymous", utc_now(), notes,
+                "quality-evaluation-v1", uncertain,
+            )
+            memory = ResearchMemory(DEFAULT_DB)
+            memory.save_evaluation_review(review)
+            memory.close()
+            st.success("Review saved to Research Memory.")
+        memory = ResearchMemory(DEFAULT_DB)
+        reviews = memory.evaluation_reviews()
+        memory.close()
+        if reviews:
+            rows = [item["payload"] for item in reviews]
+            buffer = io.StringIO()
+            writer = csv.DictWriter(buffer, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+            st.download_button(
+                "Export reviews JSONL",
+                "\n".join(json.dumps(row, default=str) for row in rows),
+                "quality-reviews.jsonl", key="_quality_reviews_jsonl",
+            )
+            st.download_button(
+                "Export reviews CSV", buffer.getvalue(),
+                "quality-reviews.csv", key="_quality_reviews_csv",
+            )
+            review_markdown = "\n\n".join(
+                f"## {row['item_type']}: {row['item_id']}\n\n"
+                f"- Label: {row['label']}\n- Reviewer: {row['reviewer']}\n"
+                f"- Uncertain: {row['uncertain']}\n- Notes: {row['notes']}"
+                for row in rows
+            )
+            st.download_button(
+                "Export reviews Markdown", review_markdown,
+                "quality-reviews.md", key="_quality_reviews_md",
+            )
 
 
 def annotation_tool() -> None:
@@ -1477,6 +1611,8 @@ def main() -> None:
     handlers = [goal_page, gap_radar_page, evidence_page, mechanism_page, alignment_page,
                 family_page, candidates_page, novelty_page, experiment_page, memory_page]
     handlers[PAGES.index(page)]()
+    if st.session_state.get("_show_quality_evaluation"):
+        quality_evaluation_panel()
     if st.session_state.ml_papers:
         with st.sidebar.expander("Trend radar"):
             st.json(trend_indicators(st.session_state.ml_papers + st.session_state.external_papers))

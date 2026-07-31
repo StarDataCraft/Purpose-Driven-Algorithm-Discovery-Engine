@@ -44,6 +44,38 @@ def _slot_weight(name: str, slot: str) -> float:
     return .5
 
 
+def structural_topology_score(
+    gap: GapSignature, mechanism: MechanismSignature
+) -> float:
+    """Compare typed roles without rewarding cross-domain shared words."""
+    gap_text = " ".join([
+        gap.failure_type, gap.required_response, gap.affected_component,
+        gap.observable_failure_signal,
+    ]).casefold()
+    mechanism_text = " ".join([
+        mechanism.memory_structure, mechanism.trigger_condition,
+        mechanism.response_rule, mechanism.selection_rule,
+        mechanism.allocation_rule,
+    ]).casefold()
+    roles = []
+    if any(term in gap_text for term in ("recurr", "return", "reactivat")):
+        roles.append(any(term in mechanism_text for term in (
+            "recurr", "reactivat", "archive", "hysteresis", "history",
+        )))
+    if any(term in gap_text for term in ("missing", "partial", "observ")):
+        roles.append(any(term in mechanism_text for term in (
+            "observ", "state estimate", "informative observation",
+        )))
+    if any(term in gap_text for term in (
+        "cluster", "component", "birth", "death", "split", "merge",
+    )):
+        roles.append(any(term in mechanism_text for term in (
+            "population", "specializ", "threshold", "regime",
+            "allocate capacity",
+        )))
+    return round(sum(roles) / len(roles), 3) if roles else 0.0
+
+
 def align(gap: GapSignature, mechanism: MechanismSignature,
           purpose: PurposeContract | None = None) -> AlignmentResult:
     reasons: list[str] = []
@@ -64,6 +96,7 @@ def align(gap: GapSignature, mechanism: MechanismSignature,
         scores[label] = lexical_similarity(left, right)
     scores["slot"] = slot_score
     scores["evidence"] = min(1.0, .35 + .15 * mechanism.evidence_count)
+    scores["topology"] = structural_topology_score(gap, mechanism)
     available = set(gap.available_inference_information)
     required = set(mechanism.required_signal)
     unavailable = [signal for signal in required if signal not in available and
@@ -73,9 +106,15 @@ def align(gap: GapSignature, mechanism: MechanismSignature,
     if purpose and any(term in " ".join(mechanism.required_signal).casefold()
                        for term in ("clean label", "future observation", "ground truth state")):
         reasons.append("inference leakage")
-    weighted = (.16 * scores["problem"] + .15 * scores["signal"] + .18 * scores["response"]
-                + .08 * scores["constraint"] + .08 * scores["preservation"]
-                + .05 * scores["timescale"] + .22 * slot_score + .08 * scores["evidence"])
+    weighted = (
+        .10 * scores["problem"] + .10 * scores["signal"]
+        + .12 * scores["response"] + .05 * scores["constraint"]
+        + .05 * scores["preservation"] + .04 * scores["timescale"]
+        + .20 * slot_score + .10 * scores["evidence"]
+        + .24 * scores["topology"]
+    )
+    if scores["topology"] >= 1 and slot_score >= .5:
+        weighted = max(weighted, .58 + .16 * slot_score)
     weighted -= .08 * len(conflicts) + .03 * len(missing)
     return AlignmentResult(gap.gap_id, mechanism.mechanism_id, scores,
                            [gap.affected_component] if slot_score > .15 else [],

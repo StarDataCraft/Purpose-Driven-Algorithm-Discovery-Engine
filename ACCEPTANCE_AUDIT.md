@@ -110,3 +110,22 @@ future adequately sized adjudicated dataset.
 | Shared run identity | PASS | External stage and candidates retain the originating `run_id`. |
 | Research-memory provenance | PASS | Runs and papers persist alongside scientific records and candidates. |
 | No generative LLM | PASS | Controlled vocabularies, rules, TF-IDF and optional local encoders only. |
+
+## Benchmark quality evaluation
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Three versioned tasks | PASS | `data/evaluation/benchmark_tasks.json`, definition tests. |
+| Manual curation without fabricated references | PASS | Empty JSONL curation slots and optional Streamlit review workflow. |
+| Retrieval metrics | PASS | Precision@K, nDCG, counts, availability, source/year diversity tests. |
+| Query contribution | PASS | Stage/query contribution records with yield and duplicate accounting. |
+| Gap/coverage/mismatch audits | PASS | Conservative labels, metadata/sample gates, scope and variant categories. |
+| Binding and known-solution audit | PASS | Granularity labels; insufficient unreviewed search is not falsely called a miss. |
+| External/mechanism/alignment audits | PASS | Native-language, complete-signature, slot/topology and information checks. |
+| Candidate rubric | PASS | Ten independent 0–4 components; exact slot and kill-criterion checks. |
+| Error taxonomy and funnel | PASS | Canonical multi-error vocabulary and counts/conversion rates. |
+| Reproducible reports | PASS | Run/commit/task/profile/corpus/seed/model/threshold/annotation metadata. |
+| Evidence-based repair | PASS | Baseline preceded controlled topology alignment repair; retrieval was unchanged. |
+| Human review and persistence | PASS | Optional UI, Research Memory, JSONL/CSV/Markdown exports. |
+| Offline CI/live separation | PASS | Mock adapters in CI; live mode requires reviewed annotations and is not automatic. |
+| No quality overclaim | PASS | Reports and UI warn that synthetic/automated labels are not ground truth. |

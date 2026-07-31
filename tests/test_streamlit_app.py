@@ -272,3 +272,16 @@ def test_gap_radar_renders_structural_views_from_fixture():
     query_text = " ".join(item.value for item in app.code).casefold()
     assert "stationary distribution" not in query_text
     assert "online accuracy" not in query_text
+
+
+def test_quality_evaluation_interface_renders_without_running_benchmark():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
+    app.checkbox(key="_show_quality_evaluation").check().run()
+
+    assert not app.exception
+    assert any(header.value == "Quality Evaluation" for header in app.header)
+    assert any(
+        "Automated quality metrics" in warning.value for warning in app.warning
+    )
+    assert app.selectbox(key="_quality_task")
+    assert app.button(key="_quality_run")

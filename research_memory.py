@@ -115,6 +115,13 @@ class ResearchMemory:
         )
         self.connection.commit()
 
+    def save_evaluation_review(self, review: Any) -> None:
+        """Persist optional human quality labels without mixing them with outputs."""
+        self.save("evaluation_review", review.item_id + ":" + review.timestamp, review)
+
+    def evaluation_reviews(self) -> list[dict[str, Any]]:
+        return self.list("evaluation_review")
+
     def schema_version(self) -> int:
         row = self.connection.execute(
             "SELECT MAX(version) FROM schema_migrations"
