@@ -180,6 +180,74 @@ failures, and defaults to lightweight TF-IDF. Runtime SQLite and caches are excl
 - Future work includes licensed full-text adapters, richer non-generative scientific
   encoders as optional plugins, BM25 reranking, and importing executed experiment results.
 
+## Structural gap engine
+
+The radar distinguishes five origins:
+
+- explicit author-stated gaps;
+- repeated structurally compatible failures;
+- relevance-aware coverage omissions;
+- assumption–reality mismatches;
+- contradictory evidence under comparable settings.
+
+Coverage records preserve `UNKNOWN` rather than fabricating dimensions. A zero-count cell is
+not a gap by itself: neighboring support, purpose relevance, metadata completeness, source
+and year spread, technical compatibility, and an executable evaluation are required.
+Assumption matching uses typed predicates and variant exceptions. Known-solution triage
+generates deterministic mitigation queries and reports whether the retrieved sample is
+insufficient or suggests a partial solution.
+
+### Engine modes
+
+```bash
+# Deployment-safe default
+GAP_ENGINE_MODE=lightweight streamlit run app.py
+
+# Optional local SPECTER2; automatically falls back if unavailable
+pip install -r requirements-enhanced.txt
+GAP_ENGINE_MODE=enhanced ENABLE_SPECTER2=true streamlit run app.py
+
+# Optional fine-tuned local SciBERT classifier
+GAP_ENGINE_MODE=full ENABLE_SPECTER2=true ENABLE_SCIBERT=true \
+SCIBERT_CHECKPOINT=/absolute/path/to/local/checkpoint streamlit run app.py
+```
+
+Other bounds include `TRANSFORMER_DEVICE`, `TRANSFORMER_BATCH_SIZE`,
+`TRANSFORMER_MAX_PAPERS`, `TRANSFORMER_MAX_SENTENCES`, and `MODEL_CACHE_DIR`.
+Model content never leaves the machine. No remote inference API is used.
+
+Enhanced retrieval combines TF-IDF and local SPECTER2 ranks through reciprocal-rank fusion.
+Research clusters use cosine agglomerative clustering; labels come from TF-IDF terms.
+Semantic gap aggregation requires compatible type, component, failure topology, and
+algorithm family, preventing embedding-only overmerge.
+
+### Weak supervision, SciBERT, and annotations
+
+The lightweight and enhanced modes use a weighted multi-label rule ensemble with section
+evidence and conflict handling. Full mode uses hybrid rules plus SciBERT **only** when a
+valid locally fine-tuned checkpoint exists. The pretrained encoder alone is not a gap
+classifier. The optional Step 2 Research Tools panel supports human correction and
+JSONL/CSV export.
+
+The curated seed annotations are intentionally small:
+
+```bash
+python -m training.evaluate_gap_classifier \
+  --data data/annotations/gap_sentences.jsonl --output runtime/rule-report.json
+
+python -m training.train_gap_classifier \
+  --train data/annotations/gap_sentences.jsonl \
+  --output artifacts/scibert_gap_classifier --seed 42
+```
+
+Training splits by paper to avoid adjacent-sentence leakage. No trained weights or claimed
+classifier improvement are included. See `MODEL_CARD_GAP_CLASSIFIER.md`.
+
+Streamlit Community Cloud should use lightweight mode and only `requirements.txt`.
+`requirements-enhanced.txt` is for local/server installations with enough memory for model
+weights. Downloaded models, caches, checkpoints, runtime databases, and annotation exports
+are ignored by Git.
+
 ## Scientific disclaimer
 
 The system proposes **testable algorithm research directions**. It does not prove that a

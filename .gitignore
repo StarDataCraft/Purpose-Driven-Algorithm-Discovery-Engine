@@ -16,3 +16,13 @@ cache/
 exports/
 *.log
 .streamlit/secrets.toml
+.model_cache/
+artifacts/
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+*.onnx
+runtime/
+*.sqlite
+*.sqlite3

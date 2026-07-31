@@ -1,0 +1,12 @@
+{
+  "recurring_drift": ["recurring concept drift", "returning regime"],
+  "nonstationarity": ["concept drift", "regime switching", "time-varying distribution"],
+  "inference_missingness": ["inference-time missing features", "sensor dropout"],
+  "correlated_features": ["interacting features", "dependent evidence"],
+  "heterogeneous_density": ["varying cluster density"],
+  "dynamic_component_count": ["cluster birth", "cluster death"],
+  "partial_observability": ["latent regime", "limited sensors"],
+  "delayed_labels": ["delayed outcome feedback"],
+  "limited_memory": ["bounded replay", "memory budget"],
+  "limited_compute": ["latency budget", "compute budget"]
+}

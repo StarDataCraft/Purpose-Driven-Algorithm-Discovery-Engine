@@ -13,3 +13,12 @@ def test_failures_persist_and_increase_penalty(tmp_path):
     reopened = ResearchMemory(path)
     assert reopened.failure_penalty("fp") > 0
     reopened.close()
+
+
+def test_structural_schema_migration_preserves_records(tmp_path):
+    memory = ResearchMemory(tmp_path / "memory.db")
+    memory.save("gap", "old", {"title": "existing"})
+    memory.save_structural("coverage_gap", "new", {"title": "coverage"})
+    assert memory.schema_version() == 2
+    assert memory.list("gap")[0]["key"] == "old"
+    memory.close()

@@ -51,3 +51,42 @@ These do not violate the product boundary but must remain visible:
 - Automated novelty is a triage status, never a genuine novelty claim.
 - Schematic operator formulas require implementation and empirical validation.
 - Large-system transfers require stronger manual literature review and decomposition.
+
+## Structural gap engine upgrade
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Five gap types | PASS | `gap_mining.py`, coverage/mismatch/contradiction modules and radar filters. |
+| Coverage records from evidence | PASS | `CoverageRecord`, `extract_coverage_records`; provenance/confidence tests. |
+| Sparse configurable cubes | PASS | `sparse_coverage_cube`, `coverage_matrix`; no dense tensor materialization. |
+| Zero cell is not automatically a gap | PASS | Purpose/support gates and `test_zero_cell_is_not_automatically_gap`. |
+| Persistent relevant omissions | PASS | Neighbor/support/metadata/evaluation scoring and missingness test. |
+| Metadata incompleteness exposed | PASS | `UNKNOWN`, field provenance, confidence, unknown-ratio hard rejection and UI. |
+| Typed algorithm assumptions | PASS | `AlgorithmAssumption`, curated contextual registry and variant exceptions. |
+| Typed observed conditions | PASS | `ObservedCondition`, controlled patterns and section/scope provenance. |
+| Predicate mismatch engine | PASS | Explicit relation table; contradiction/compatibility/variant tests. |
+| Structural gaps remain `GapSignature` | PASS | Additive backward-compatible fields and conversion tests. |
+| Conservative contradiction detection | PASS | Comparable-field gate and negative control test. |
+| Known-solution triage | PASS | Deterministic mitigation queries, corpus scope, uncertainty, UI status. |
+| Lightweight mode default | PASS | `GAP_ENGINE_MODE`, lazy imports, transformer-free subprocess test. |
+| Optional local SPECTER2 | PASS | Lazy CPU backend and optional enhanced requirements; no import-time load. |
+| Model-load fallback | PASS | `select_embedding_backend` and failure regression test. |
+| Hybrid sparse/dense retrieval | PASS | Auditable RRF ranks/scores and deterministic fake-backend tests. |
+| Embedding cache invalidation | PASS | Model/content/preprocessing key and changed-abstract test. |
+| Research clustering | PASS | Cosine agglomerative threshold clustering and reproducibility test. |
+| Semantic aggregation safeguards | PASS | Embedding threshold plus type/component/failure/family compatibility test. |
+| Optional SciBERT | PASS | Valid fine-tuned checkpoint required; base encoder never treated as classifier. |
+| Weak-supervision fallback | PASS | Weighted multi-label votes, section evidence, conflicts and tests. |
+| Human annotation workflow | PASS | Versioned 13-row seed set and optional Step 2 UI/export. |
+| Context-aware classification | PASS | Bounded section/previous/target/next representation and test. |
+| Training/evaluation tools | PASS | Optional local SciBERT training uses paper splits, class-weighted multi-label BCE, fixed seeds, early stopping, checkpoints, and per-label/macro/micro metrics; no checkpoint was trained in this task. |
+| Classifier performance claims | PASS | None made; model card explicitly prohibits claims without held-out evaluation. |
+| Research memory migration | PASS | Schema version 2 adds structural/model records and preserves legacy records in test. |
+| Resource bounds/diagnostics | PASS | Paper/sentence/cache/annotation bounds and runtime mode/process/truncation display. |
+| Streamlit structural views | PASS | Coverage, mismatch, contradiction, clusters, model provenance and annotation panels. |
+| Downstream candidate generation | PASS | Existing fixed-seed and AppTest candidate workflows remain green. |
+| Community Cloud deployment | PASS | Lightweight default, core requirements unchanged, enhanced stack separate. |
+
+No checkpoint was trained in this task because the seed dataset is intentionally too
+small for a credible scientific performance claim. The command is implemented for a
+future adequately sized adjudicated dataset.

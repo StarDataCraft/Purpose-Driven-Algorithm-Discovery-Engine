@@ -7,6 +7,19 @@ from hashlib import sha1
 import re
 
 from algorithm_library import load_algorithm_library
+from assumption_analysis import (
+    detect_assumption_mismatches, extract_observed_conditions,
+    load_assumption_registry, mismatch_to_signature,
+)
+from contradiction_analysis import contradiction_to_signature, detect_contradictory_evidence
+from coverage_analysis import (
+    coverage_gap_to_signature, detect_coverage_gaps, extract_coverage_records,
+)
+from config import SETTINGS
+from annotation_schema import SentenceAnnotation
+from sentence_classifier import (
+    HybridGapSentenceClassifier, SciBertGapSentenceClassifier,
+)
 from models import GapSignature, Paper, PurposeContract
 from text_processing import section_weight, split_sentences
 
@@ -57,11 +70,38 @@ def _failure(text: str, purpose: PurposeContract | None) -> tuple[str, str, str]
 
 def mine_explicit_gaps(papers: list[Paper], purpose: PurposeContract | None = None) -> list[GapSignature]:
     gaps = []
+    model = (
+        SciBertGapSentenceClassifier(
+            SETTINGS.scibert_checkpoint, SETTINGS.transformer_device
+        )
+        if SETTINGS.gap_engine_mode == "full" and SETTINGS.enable_scibert
+        and SETTINGS.scibert_checkpoint else None
+    )
+    classifier = HybridGapSentenceClassifier(model)
+    gap_labels = {
+        "LIMITATION", "FAILURE_CONDITION", "ASSUMPTION", "FUTURE_WORK",
+        "MISSING_EVALUATION", "DEPLOYMENT_CONSTRAINT", "RESOURCE_CONSTRAINT",
+        "CONTRADICTORY_RESULT",
+    }
+    sentence_count = 0
     for paper in papers:
         sources = paper.sections or {"abstract": paper.abstract}
         for section, body in sources.items():
             for sentence in split_sentences(body):
-                if not GAP_CUES.search(sentence):
+                if sentence_count >= SETTINGS.transformer_max_sentences:
+                    break
+                sentence_count += 1
+                classification = classifier.classify(SentenceAnnotation(
+                    sentence_id=f"{paper.paper_id}:{sentence_count}",
+                    paper_id=paper.paper_id, section=section,
+                    previous_sentence="", target_sentence=sentence,
+                    next_sentence="", labels=[], annotator="runtime",
+                    annotation_version="runtime", adjudication_status="unreviewed",
+                ))
+                if not GAP_CUES.search(sentence) and not (
+                    gap_labels & set(classification.labels)
+                    and classification.weak_label_confidence >= .7
+                ):
                     continue
                 algorithm, family, slot = _algorithm_for(f"{paper.title} {sentence}", purpose)
                 failure, signal, response = _failure(sentence, purpose)
@@ -89,6 +129,13 @@ def mine_explicit_gaps(papers: list[Paper], purpose: PurposeContract | None = No
                     trend_score=.5, practical_value_score=.7,
                     testability_score=.75, confidence_score=round(.45 + .45 * scope_weight, 3),
                     timescale="online" if "drift" in failure else "per evaluation",
+                    classifier_version=classification.model_version,
+                    evidence_strength_components={
+                        "rule_or_classifier_confidence":
+                            classification.weak_label_confidence,
+                        "section_weight": scope_weight,
+                        "abstract_only_penalty": .2 if section == "abstract" else 0,
+                    },
                 ))
     return gaps
 
@@ -132,4 +179,38 @@ def corpus_summary(papers: list[Paper], gaps: list[GapSignature]) -> dict[str, o
 
 def mine_gaps(papers: list[Paper], purpose: PurposeContract | None = None) -> list[GapSignature]:
     explicit = mine_explicit_gaps(papers, purpose)
-    return explicit + aggregate_gaps(explicit)
+    repeated = aggregate_gaps(explicit)
+    for gap in explicit:
+        gap.detection_method = "section_aware_cue_rules"
+        gap.model_mode = SETTINGS.gap_engine_mode
+    for gap in repeated:
+        gap.structural_gap_subtype = "repeated"
+        gap.detection_method = "structured_repetition"
+        gap.model_mode = SETTINGS.gap_engine_mode
+    if purpose is None:
+        return explicit + repeated
+    records = extract_coverage_records(papers, purpose)
+    coverage = [
+        coverage_gap_to_signature(item, purpose)
+        for item in detect_coverage_gaps(
+            records, purpose, SETTINGS.minimum_coverage_support,
+            SETTINGS.maximum_unknown_ratio,
+        )
+    ]
+    conditions = extract_observed_conditions(papers, purpose)
+    used = {
+        record.algorithm for record in records if record.algorithm != "UNKNOWN"
+    } | {
+        record.algorithm_family for record in records if record.algorithm_family != "UNKNOWN"
+    }
+    mismatches = [
+        mismatch_to_signature(item, purpose)
+        for item in detect_assumption_mismatches(
+            load_assumption_registry(), conditions, used, purpose
+        )
+    ]
+    contradictions = [
+        contradiction_to_signature(item, purpose)
+        for item in detect_contradictory_evidence(papers, records)
+    ]
+    return explicit + repeated + coverage + mismatches + contradictions

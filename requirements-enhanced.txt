@@ -1,0 +1,4 @@
+transformers>=4.38,<5
+torch>=2.1
+adapters>=0.2
+accelerate>=0.27

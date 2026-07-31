@@ -1,0 +1,15 @@
+[
+  {"paper_id":"miss-1","title":"Random Forest MCAR Classification","abstract":"Random Forest accuracy is evaluated under MCAR with a standard benchmark.","year":2022,"source":"openalex","domain":"machine_learning"},
+  {"paper_id":"miss-2","title":"Random Forest MAR Classification","abstract":"Random Forest accuracy is evaluated under MAR with cross-validation.","year":2023,"source":"arxiv","domain":"machine_learning"},
+  {"paper_id":"miss-3","title":"Missing Data Robustness","abstract":"Random Forest robustness is evaluated under MCAR; calibration is not evaluated.","year":2025,"source":"openalex","domain":"machine_learning"},
+  {"paper_id":"online-1","title":"Random Forest Recurring Drift","abstract":"Static Random Forest voting degrades under recurring concept drift with delayed labels and slow recovery time.","year":2023,"source":"arxiv","domain":"machine_learning"},
+  {"paper_id":"online-2","title":"Online Ensemble Recovery","abstract":"Random Forest fails when recurring regimes return; online accuracy recovers slowly.","year":2025,"source":"openalex","domain":"machine_learning"},
+  {"paper_id":"cluster-1","title":"K-means Dynamic Clusters","abstract":"K-means assumes fixed K although cluster birth and cluster death occur; ARI and NMI are reported.","year":2024,"source":"arxiv","domain":"machine_learning"},
+  {"paper_id":"cluster-2","title":"K-means Heterogeneous Density","abstract":"K-means degrades with varying cluster density; ARI is reported but stability is not evaluated.","year":2025,"source":"openalex","domain":"machine_learning"},
+  {"paper_id":"cluster-3","title":"K-means Initialization","abstract":"K-means remains sensitive to initialization on heterogeneous mixtures; NMI is reported.","year":2022,"source":"openalex","domain":"machine_learning"},
+  {"paper_id":"gp-1","title":"Gaussian Process Regime Forecasting","abstract":"A stationary Gaussian Process degrades under regime switching; RMSE is reported.","year":2022,"source":"arxiv","domain":"machine_learning"},
+  {"paper_id":"gp-2","title":"Gaussian Process Partial Observability","abstract":"Gaussian Process forecasting under a latent regime has partial observability; calibration is not evaluated.","year":2024,"source":"openalex","domain":"machine_learning"},
+  {"paper_id":"gp-3","title":"Gaussian Process Recovery","abstract":"Stationary Gaussian Process prediction fails after regime change and recovery time is not evaluated.","year":2025,"source":"arxiv","domain":"machine_learning"},
+  {"paper_id":"claim-1","title":"Random Forest Drift Robustness","abstract":"Random Forest remains robust under recurring concept drift with online accuracy benchmark.","year":2024,"source":"openalex","domain":"machine_learning"},
+  {"paper_id":"claim-2","title":"Random Forest Drift Degradation","abstract":"Random Forest degrades under recurring concept drift with online accuracy benchmark.","year":2025,"source":"arxiv","domain":"machine_learning"}
+]

@@ -86,6 +86,22 @@ class GapSignature:
     testability_score: float
     confidence_score: float
     timescale: str = ""
+    detection_method: str = "cue_rules"
+    structural_gap_subtype: str = ""
+    coverage_gap_id: str = ""
+    mismatch_id: str = ""
+    research_cluster_id: str = ""
+    field_provenance: dict[str, str] = field(default_factory=dict)
+    comparison_evidence: list[str] = field(default_factory=list)
+    contradiction_evidence: list[str] = field(default_factory=list)
+    missing_dimension: str = ""
+    known_mitigations: list[str] = field(default_factory=list)
+    unresolved_remainder: str = ""
+    metadata_completeness: float = 0.0
+    model_mode: str = "lightweight"
+    classifier_version: str = "rules-v1"
+    embedding_version: str = "tfidf-v1"
+    evidence_strength_components: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

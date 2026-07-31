@@ -130,3 +130,19 @@ def test_candidate_failure_displays_stage_and_error():
         and "controlled failure" in error.value
         for error in app.error
     )
+
+
+def test_gap_radar_renders_structural_views_from_fixture():
+    app = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
+    app.button[0].click().run()
+    app.radio(key="_workflow_page").set_value(
+        "2 · Latest ML/DL gap radar"
+    ).run(timeout=30)
+
+    assert not app.exception
+    labels = [expander.label for expander in app.expander]
+    assert "Coverage Matrix" in labels
+    assert "Assumption Mismatch view" in labels
+    assert "Contradictory evidence view" in labels
+    assert "Research Clusters" in labels
+    assert app.session_state["coverage_records"]

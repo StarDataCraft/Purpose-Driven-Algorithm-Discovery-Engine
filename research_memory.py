@@ -23,6 +23,15 @@ CREATE TABLE IF NOT EXISTS ratings (
  candidate_id TEXT PRIMARY KEY, rating REAL NOT NULL, notes TEXT,
  created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS schema_migrations (
+ version INTEGER PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS structural_records (
+ id INTEGER PRIMARY KEY, kind TEXT NOT NULL, record_key TEXT NOT NULL,
+ payload TEXT NOT NULL, model_mode TEXT, model_version TEXT,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(kind, record_key)
+);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (2);
 """
 
 FAILURE_CATEGORIES = {
@@ -93,6 +102,24 @@ class ResearchMemory:
             (candidate_id, rating, notes),
         )
         self.connection.commit()
+
+    def save_structural(self, kind: str, record_key: str, record: Any,
+                        model_mode: str = "lightweight",
+                        model_version: str = "") -> None:
+        payload = asdict(record) if is_dataclass(record) else record
+        self.connection.execute(
+            """INSERT OR REPLACE INTO structural_records
+               (kind,record_key,payload,model_mode,model_version) VALUES(?,?,?,?,?)""",
+            (kind, record_key, json.dumps(payload, default=str),
+             model_mode, model_version),
+        )
+        self.connection.commit()
+
+    def schema_version(self) -> int:
+        row = self.connection.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()
+        return int(row[0] or 1)
 
     def close(self) -> None:
         self.connection.close()

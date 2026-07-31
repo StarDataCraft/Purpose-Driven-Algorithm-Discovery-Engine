@@ -1,0 +1,17 @@
+{
+  "cubes": [
+    ["algorithm_family", "failure_conditions", "metric_categories"],
+    ["task", "distribution_conditions", "evaluation_protocols"],
+    ["data_type", "missingness_conditions", "metric_categories"],
+    ["algorithm_family", "deployment_conditions", "metric_categories"],
+    ["task", "benchmark", "publication_year"],
+    ["algorithm_family", "assumptions", "distribution_conditions"]
+  ],
+  "provenance_levels": [
+    "explicitly_reported",
+    "strong_rule",
+    "metadata",
+    "unknown"
+  ],
+  "unknown_value": "UNKNOWN"
+}
