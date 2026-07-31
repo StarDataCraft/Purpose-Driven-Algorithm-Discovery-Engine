@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import csv
 import io
+import time
 from collections import Counter
 from dataclasses import asdict
 from datetime import date, datetime, timezone
@@ -53,14 +54,21 @@ from evaluation.run_benchmark import run_offline_benchmark
 from evaluation.schemas import HumanReview
 from run_models import utc_now
 from result_explanation import research_result
+from ux_models import (
+    PIPELINE_VERSION, build_direction_portfolio, build_idea_derivation,
+    build_idea_explanation,
+)
+from diagram_builders import (
+    before_after_spec, evidence_to_idea_spec, experiment_spec,
+    mechanism_transfer_spec,
+)
 
-PAGES = [
-    "1 · Goal setup", "2 · Latest ML/DL gap radar", "3 · Gap evidence",
-    "4 · External mechanism search", "5 · Structural alignment",
-    "6 · Research direction families", "7 · Candidate algorithms",
-    "8 · Novelty and falsification", "9 · Minimal experiment",
-    "10 · Research memory",
+PRIMARY_STEPS = [
+    "1 · Discover directions / 发现方向",
+    "2 · Analyze the gap / 分析 Gap",
+    "3 · Explain the idea / 解释新想法",
 ]
+PAGES = PRIMARY_STEPS  # Compatibility for non-UI helpers.
 
 
 def load_fixture(name: str) -> list[Paper]:
@@ -217,6 +225,17 @@ def initialize_state() -> None:
         "evidence_events": [], "canonical_gap_families": [],
         "promoted_gap_families": [], "exploratory_gap_families": [],
         "promoted_gaps": [], "exploratory_gaps": [],
+        "current_purpose_contract": None,
+        "current_direction_portfolio": [],
+        "selected_direction_id": "",
+        "selected_direction_snapshot": None,
+        "selected_gap_family_id": "",
+        "current_idea_portfolio": [],
+        "selected_idea_id": "",
+        "current_result_explanation": None,
+        "current_diagram_specs": [],
+        "active_primary_step": PRIMARY_STEPS[0],
+        "ux_performance": {},
         "engine_diagnostics": engine_state_defaults(SETTINGS),
     }
     for key, value in defaults.items():
@@ -297,7 +316,8 @@ def record_discovery_stages(
     run.exploratory_gap_count = len(result.consolidation.exploratory)
     evidence_papers = {
         event.paper_id for event in result.consolidation.evidence_events
-        if event.paper_id != "corpus"
+        if event.paper_id not in {"corpus", "purpose"}
+        and event.paper_id in {paper.paper_id for paper in result.papers}
     }
     run.evidence_bearing_paper_count = len(evidence_papers)
     run.papers_used_for_gap_generation = len(result.papers)
@@ -321,6 +341,10 @@ def invalidate_downstream_for_purpose() -> None:
         "mechanisms": [], "rejected_mechanisms": [], "alignments": [],
         "direction_families": [], "candidate_portfolio": [],
         "external_search_diagnostics": None, "current_external_run": None,
+        "current_direction_portfolio": [], "selected_direction_id": "",
+        "selected_direction_snapshot": None, "selected_gap_family_id": "",
+        "current_idea_portfolio": [], "selected_idea_id": "",
+        "current_result_explanation": None, "current_diagram_specs": [],
     }.items():
         st.session_state[key] = empty
 
@@ -333,6 +357,10 @@ def invalidate_downstream_for_gap() -> None:
         st.session_state[key] = []
     st.session_state.external_search_diagnostics = None
     st.session_state.current_external_run = None
+    st.session_state.current_idea_portfolio = []
+    st.session_state.selected_idea_id = ""
+    st.session_state.current_result_explanation = None
+    st.session_state.current_diagram_specs = []
 
 
 def snapshot_selected_gap(gap: object, run: ResearchRun) -> dict[str, object]:
@@ -461,14 +489,15 @@ def render_research_run(run: ResearchRun | None, heading: str) -> None:
 
 def navigate_to(page: str) -> None:
     """Update the sidebar widget through a pre-rerun button callback."""
-    st.session_state["_workflow_page"] = page
+    st.session_state["_primary_step"] = page
+    st.session_state.active_primary_step = page
 
 
 def choose_search_mode(mode: str, force_fresh: bool = False) -> None:
     """Return to Step 1 with an explicit retrieval choice."""
     st.session_state["_purpose_search_mode"] = mode
     st.session_state["_purpose_force_fresh"] = force_fresh
-    st.session_state["_workflow_page"] = PAGES[0]
+    st.session_state["_primary_step"] = PRIMARY_STEPS[0]
 
 
 def candidate_prerequisites() -> dict[str, tuple[bool, str]]:
@@ -589,12 +618,23 @@ def sidebar() -> str:
         "configuration_warnings", []
     ):
         st.sidebar.warning(warning)
-    with st.sidebar.expander("Research Tools"):
-        st.checkbox(
-            "Quality Evaluation", key="_show_quality_evaluation",
-            help="Optional benchmark and human-review tools.",
+    st.sidebar.markdown("**1 发现方向 → 2 分析 Gap → 3 解释新想法**")
+    step = st.sidebar.radio(
+        "Primary workflow", PRIMARY_STEPS, key="_primary_step"
+    )
+    st.session_state.active_primary_step = step
+    with st.sidebar.expander("Research Tools / 研究工具", expanded=False):
+        st.selectbox(
+            "Technical view",
+            [
+                "None", "Research run provenance", "Full retrieval diagnostics",
+                "Coverage and evidence audit", "Structural alignment audit",
+                "Quality Evaluation", "Annotation tools", "Research memory",
+                "Build information",
+            ],
+            key="_research_tool",
         )
-    return st.sidebar.radio("Workflow", PAGES, key="_workflow_page")
+    return step
 
 
 def quality_evaluation_panel() -> None:
@@ -1964,15 +2004,681 @@ def memory_page() -> None:
     memory.close()
 
 
+def execute_direction_search(
+    task: str, failure: str, improvement: str, data_type: str,
+    use_case: str, metric: str, years: tuple[int, int], search_mode: str,
+    sources: list[str], force_fresh: bool, allow_cache: bool,
+    allow_offline_fallback: bool, maximum_per_query: int, maximum_total: int,
+) -> None:
+    """Run the unchanged retrieval/discovery pipeline for the Part 1 action."""
+    previous = st.session_state.purpose
+    same_purpose = bool(
+        previous and previous.task == task and previous.data_type == data_type
+        and previous.current_failure == failure
+        and previous.desired_improvement == improvement
+        and previous.publication_window == years
+    )
+    purpose = PurposeContract(
+        previous.purpose_id if same_purpose else f"purpose:{uuid4().hex[:10]}",
+        "user", use_case, task, data_type, failure, improvement, metric,
+        ["recovery time", "memory use"], ["stable-regime accuracy"],
+        available_training_information=["features", "delayed outcome feedback"],
+        available_inference_information=[
+            "input features", "prediction residual", "regime similarity",
+        ],
+        risk_tolerance="medium", preferred_candidate_scale="small",
+        publication_window=years,
+    )
+    if not same_purpose:
+        invalidate_downstream_for_purpose()
+    st.session_state.purpose = purpose
+    st.session_state.current_purpose_contract = purpose
+    broad_queries, broad_audit = generate_problem_queries(purpose)
+    requested_mode = {
+        "Live scholarly APIs": "LIVE",
+        "Cached live results": "CACHE",
+        "Offline demonstration fixtures": "OFFLINE_FIXTURE",
+    }[search_mode]
+    papers, run = retrieve_corpus(
+        purpose, broad_queries, requested_mode=requested_mode, sources=sources,
+        maximum_per_query=maximum_per_query, maximum_total=maximum_total,
+        allow_cache=allow_cache, allow_offline_fallback=allow_offline_fallback,
+        force_fresh=force_fresh,
+        fixture_loader=lambda: load_fixture("ml_papers.json"),
+        fixture_path="data/offline_fixtures/ml_papers.json",
+        stage_name="broad_ml_retrieval",
+    )
+    bindings = detect_algorithm_bindings(papers, purpose)
+    focused_queries, focused_audit = generate_focused_algorithm_queries(
+        purpose, bindings, SETTINGS.algorithm_binding_confidence_threshold
+    )
+    run.focused_algorithm_queries = focused_queries
+    if focused_queries and requested_mode != "OFFLINE_FIXTURE" and papers:
+        focused_papers, focused_run = retrieve_corpus(
+            purpose, focused_queries, requested_mode=requested_mode,
+            sources=sources, maximum_per_query=maximum_per_query,
+            maximum_total=maximum_total, allow_cache=allow_cache,
+            force_fresh=force_fresh, stage_name="focused_ml_retrieval",
+        )
+        papers = deduplicate_papers([*papers, *focused_papers])[:maximum_total]
+        run.source_results.extend(focused_run.source_results)
+        run.stages.extend(focused_run.stages)
+        run.source_failures.update(focused_run.source_failures)
+        run.raw_paper_count += focused_run.raw_paper_count
+        run.focused_query_count = len(focused_queries)
+        run.total_query_count = run.broad_query_count + run.focused_query_count
+        run.query_count = run.total_query_count
+        run.finalize_from_papers(papers)
+    binding = (
+        bindings[0] if bindings and bindings[0].confidence >=
+        SETTINGS.algorithm_binding_confidence_threshold else None
+    )
+    discovery = discover_structural_gaps(
+        papers, purpose,
+        binding.algorithm if binding and binding.binding_granularity ==
+        "exact algorithm" else "Unspecified",
+    )
+    for gap in discovery.gaps:
+        gap.research_run_id = run.run_id
+    apply_discovery_result(discovery)
+    record_discovery_stages(run, discovery)
+    run.structural_gap_count = len(discovery.gaps)
+    generate_quality_warnings(run)
+    portfolio = build_direction_portfolio(
+        run.run_id, purpose, discovery.consolidation.promoted,
+        discovery.gaps, discovery.papers,
+    )
+    st.session_state.current_research_run = run
+    st.session_state.current_direction_portfolio = portfolio
+    st.session_state.algorithm_bindings = bindings
+    st.session_state.problem_query_audit = broad_audit
+    st.session_state.focused_query_audit = focused_audit
+    st.session_state.fetch_failures = run.source_failures
+
+
+def select_direction(direction_id: str) -> None:
+    directions = {
+        item.direction_id: item
+        for item in st.session_state.current_direction_portfolio
+    }
+    direction = directions[direction_id]
+    if st.session_state.selected_direction_id != direction_id:
+        invalidate_downstream_for_gap()
+    gap = next(
+        item for item in st.session_state.promoted_gaps
+        if item.gap_id == direction.selected_gap_id
+    )
+    st.session_state.selected_direction_id = direction_id
+    st.session_state.selected_direction_snapshot = direction
+    st.session_state.selected_gap_family_id = direction.gap_family_ids[0]
+    st.session_state.selected_gap = gap
+    st.session_state.selected_gap_id = gap.gap_id
+    run = st.session_state.current_research_run
+    if run:
+        run.selected_gap_id = gap.gap_id
+        run.selected_gap_snapshot = snapshot_selected_gap(gap, run)
+    st.session_state["_primary_step"] = PRIMARY_STEPS[1]
+    st.session_state.active_primary_step = PRIMARY_STEPS[1]
+
+
+def select_idea(candidate_id: str) -> None:
+    st.session_state.selected_idea_id = candidate_id
+    st.session_state.current_result_explanation = None
+    st.session_state.current_diagram_specs = []
+    st.session_state["_primary_step"] = PRIMARY_STEPS[2]
+    st.session_state.active_primary_step = PRIMARY_STEPS[2]
+
+
+def render_compact_run_summary() -> None:
+    run = st.session_state.current_research_run
+    if not run:
+        return
+    st.subheader("Research evidence / 研究证据")
+    if run.actual_search_mode == "OFFLINE_FIXTURE":
+        st.warning(
+            "Offline demonstration — bundled papers are not a current "
+            "literature review."
+        )
+    columns = st.columns(4)
+    columns[0].metric("Candidate papers", run.candidate_paper_count)
+    columns[1].metric(
+        "Automatically relevant", run.automatically_relevant_paper_count
+    )
+    columns[2].metric("Human reviewed", run.human_reviewed_paper_count)
+    columns[3].metric("Evidence-bearing", run.evidence_bearing_paper_count)
+    st.caption(
+        f"Mode: {run.actual_search_mode} · Sources: "
+        f"{', '.join(run.sources_attempted) or 'fixture'} · "
+        f"Actual years: {run.actual_publication_year_min or '—'}–"
+        f"{run.actual_publication_year_max or '—'} · "
+        f"Canonical families: {run.canonical_gap_family_count} · "
+        f"Promoted directions: {run.promoted_gap_count}"
+    )
+
+
+def render_related_papers(direction: object) -> None:
+    papers = {
+        paper.paper_id: paper for paper in st.session_state.ml_papers
+    }
+    gap = next((
+        item for item in st.session_state.gaps
+        if item.gap_id == direction.selected_gap_id
+    ), None)
+    excerpts = {
+        paper_id: sentence for paper_id, sentence in zip(
+            gap.evidence_paper_ids, gap.evidence_sentences
+        )
+    } if gap else {}
+    grouped: dict[str, list[Paper]] = {}
+    for paper_id in direction.evidence_paper_ids:
+        paper = papers.get(paper_id)
+        if paper:
+            grouped.setdefault(
+                direction.paper_roles.get(paper_id, "foundational context"), []
+            ).append(paper)
+    if not grouped:
+        st.caption("No paper-level record is available for this direction.")
+    for role, records in grouped.items():
+        st.markdown(f"**{role.title()}**")
+        for paper in records:
+            st.markdown(
+                f"- [{paper.title}]({paper.url or paper.doi or '#'}) "
+                f"({paper.year}, {paper.source})  \n"
+                f"  Estimated: `{paper.estimated_relevance_label}` · "
+                f"Human review: `{paper.reviewed_relevance_label or 'not reviewed'}`  \n"
+                f"  Evidence: {excerpts.get(paper.paper_id, 'Connected through the canonical gap family.')}"
+            )
+
+
+def discover_directions_page() -> None:
+    st.title("Discover directions / 发现方向")
+    st.caption(
+        "Find evidence-backed candidate research directions and the papers "
+        "that support them."
+    )
+    with st.form("_direction_search_form"):
+        task = st.text_input(
+            "What area or task are you interested in?",
+            "online learning", key="_purpose_task",
+        )
+        failure = st.text_input(
+            "What problem or failure concerns you?",
+            "recurring concept drift with slow recovery", key="_purpose_failure",
+        )
+        improvement = st.text_input(
+            "What kind of improvement matters?",
+            "reduce recovery time without excessive memory growth",
+            key="_purpose_improvement",
+        )
+        data_type = st.text_input(
+            "What data or application setting is involved?",
+            "tabular streams", key="_purpose_data_type",
+        )
+        years = st.slider(
+            "Publication year range", 2018, date.today().year,
+            (2022, date.today().year), key="_purpose_years",
+        )
+        with st.expander("Advanced search settings"):
+            use_case = st.text_input(
+                "Application", "adaptive decision support",
+                key="_purpose_use_case",
+            )
+            metric = st.text_input(
+                "Primary metric", "recovery time", key="_purpose_metric"
+            )
+            search_mode = st.radio(
+                "Search data source",
+                ["Live scholarly APIs", "Cached live results",
+                 "Offline demonstration fixtures"],
+                key="_purpose_search_mode",
+            )
+            force_fresh = st.checkbox(
+                "Force fresh live search", key="_purpose_force_fresh"
+            )
+            allow_cache = st.checkbox(
+                "Allow cache", value=True, key="_purpose_allow_cache"
+            )
+            allow_fallback = st.checkbox(
+                "Allow offline fallback", key="_purpose_allow_offline_fallback"
+            )
+            openalex = st.checkbox(
+                "OpenAlex enabled", value=True, key="_purpose_openalex"
+            )
+            arxiv = st.checkbox(
+                "arXiv enabled", value=True, key="_purpose_arxiv"
+            )
+            maximum_per_query = st.number_input(
+                "Maximum papers per query", 1, 50, 8,
+                key="_purpose_max_per_query",
+            )
+            maximum_total = st.number_input(
+                "Maximum total papers", 5, 200, 80,
+                key="_purpose_max_total",
+            )
+        submitted = st.form_submit_button(
+            "Find research directions / 寻找研究方向", type="primary"
+        )
+    if submitted:
+        part_started = time.perf_counter()
+        progress = st.progress(0, text="1/8 Searching recent ML/DL papers")
+        try:
+            execute_direction_search(
+                task, failure, improvement, data_type, use_case, metric, years,
+                search_mode,
+                [name for name, enabled in (
+                    ("openalex", openalex), ("arxiv", arxiv)
+                ) if enabled],
+                force_fresh, allow_cache, allow_fallback,
+                int(maximum_per_query), int(maximum_total),
+            )
+            progress.progress(100, text="8/8 Ranking research directions")
+            st.session_state.ux_performance["part_1_search_seconds"] = round(
+                time.perf_counter() - part_started, 4
+            )
+        finally:
+            progress.empty()
+    render_compact_run_summary()
+    directions = st.session_state.current_direction_portfolio
+    if not directions:
+        st.info(
+            "Enter a research problem and select “Find research directions.”"
+        )
+        if st.session_state.exploratory_gap_families:
+            with st.expander("Exploratory directions and rejection summary"):
+                st.dataframe([{
+                    "direction": item.representative_title,
+                    "status": item.promotion_status,
+                    "reason": "; ".join(item.rejection_reasons),
+                } for item in st.session_state.exploratory_gap_families])
+        return
+    st.header("Promising research directions / 候选研究方向")
+    for index, direction in enumerate(directions):
+        with st.container(border=True):
+            st.subheader(direction.title)
+            st.write(direction.plain_language_summary)
+            st.write({
+                "Task": direction.task,
+                "Failure condition": direction.failure_condition,
+                "Algorithm family": direction.affected_algorithm_family,
+                "Gap types": ", ".join(direction.gap_types),
+                "Why it matters": direction.unresolved_remainder,
+                "Primary metric": direction.primary_metric,
+                "Evidence papers": direction.evidence_bearing_paper_count,
+                "Independent sources": direction.independent_source_count,
+                "Known solutions": direction.known_solution_status,
+                "Confidence": round(direction.evidence_confidence, 2),
+                "Risk": direction.risk_level,
+                "Uncertainty": "; ".join(direction.uncertainties),
+            })
+            with st.expander("View related papers / 查看相关论文"):
+                render_related_papers(direction)
+            st.button(
+                "Analyze this direction / 分析这个方向",
+                key=f"_select_direction_{index}",
+                type="primary",
+                on_click=select_direction,
+                args=(direction.direction_id,),
+            )
+
+
+def build_current_idea_portfolio() -> None:
+    prepare_missing_candidate_stages()
+    direction = st.session_state.selected_direction_snapshot
+    gap = st.session_state.selected_gap
+    run = st.session_state.current_research_run
+    derivations = []
+    for candidate in st.session_state.candidate_portfolio[:5]:
+        mechanism = next((
+            item for item in st.session_state.mechanisms
+            if item.name in candidate.borrowed_mechanisms
+            or item.mechanism_id in candidate.borrowed_mechanisms
+        ), st.session_state.mechanisms[0])
+        alignment = next((
+            item for item in st.session_state.alignments
+            if item.mechanism_id == mechanism.mechanism_id and not item.rejected
+        ), next(item for item in st.session_state.alignments if not item.rejected))
+        derivations.append(build_idea_derivation(
+            run.run_id, direction, gap, mechanism, alignment, candidate
+        ))
+    st.session_state.current_idea_portfolio = derivations
+
+
+def analyze_gap_page() -> None:
+    st.title("Analyze the gap / 分析 Gap")
+    direction = st.session_state.selected_direction_snapshot
+    if not direction:
+        st.info("Select a research direction in Part 1.")
+        st.button(
+            "Back to directions / 返回研究方向",
+            on_click=navigate_to, args=(PRIMARY_STEPS[0],),
+        )
+        return
+    st.button(
+        "Back to directions / 返回研究方向",
+        on_click=navigate_to, args=(PRIMARY_STEPS[0],),
+    )
+    st.header("Selected direction / 已选方向")
+    st.write({
+        "Direction": direction.title,
+        "Problem": direction.plain_language_summary,
+        "Evidence papers": direction.evidence_bearing_paper_count,
+        "Algorithm family": direction.affected_algorithm_family,
+        "Primary metric": direction.primary_metric,
+        "Known-solution status": direction.known_solution_status,
+        "Confidence": round(direction.evidence_confidence, 2),
+    })
+    gap = st.session_state.selected_gap
+    st.header("What existing research already covers")
+    mitigations = gap.known_mitigations or list(direction.current_solution_families)
+    st.write([
+        *mitigations,
+        "The retrieved corpus covers the task and observed failure condition.",
+        "Coverage completeness depends on available paper metadata.",
+    ])
+    with st.expander("Technical evidence"):
+        st.dataframe([
+            asdict(item) for item in st.session_state.coverage_records
+        ], use_container_width=True)
+    st.header("Gap Analysis / Gap 分析")
+    st.subheader("The gap in one sentence")
+    st.write(direction.plain_language_summary)
+    st.subheader("Paper-stated evidence / 论文直接证据")
+    paper_evidence = [
+        sentence for sentence, section in zip(
+            gap.evidence_sentences, gap.evidence_sections
+        ) if section != "purpose_contract"
+    ]
+    st.write(paper_evidence or ["No direct paper-stated sentence; this gap is system-inferred."])
+    st.subheader("System inference / 系统推断")
+    st.write({
+        "Detection": gap.structural_gap_subtype or gap.detection_method,
+        "Inference": f"{gap.failure_type} affects {gap.affected_component}.",
+        "Metric": gap.primary_metric,
+    })
+    st.subheader("Known solutions / 已有解法")
+    st.write(mitigations or ["No direct mitigation was confirmed in the searched corpus."])
+    st.subheader("Unresolved remainder / 尚未解决")
+    st.write(gap.unresolved_remainder or direction.unresolved_remainder)
+    st.subheader("Uncertainty / 不确定性")
+    st.write(direction.uncertainties)
+    if not st.session_state.current_idea_portfolio:
+        if st.button(
+            "Derive candidate ideas / 推导候选想法",
+            type="primary", key="_derive_ideas",
+        ):
+            part_started = time.perf_counter()
+            with st.spinner("Searching mechanisms, aligning structures, and synthesizing ideas…"):
+                try:
+                    build_current_idea_portfolio()
+                    st.session_state.ux_performance[
+                        "part_2_analysis_seconds"
+                    ] = round(time.perf_counter() - part_started, 4)
+                except Exception as exc:
+                    st.session_state.candidate_run_diagnostics = {
+                        "status": "failure", "error": str(exc),
+                        "rejections": {}, "rejected_paths": [],
+                    }
+                    st.error(f"Could not derive ideas: {exc}")
+    ideas = st.session_state.current_idea_portfolio
+    if not ideas:
+        diagnostics = st.session_state.candidate_run_diagnostics or {}
+        if diagnostics.get("error"):
+            st.warning(
+                "No external mechanism or candidate idea passed validation. "
+                f"Reason: {diagnostics['error']}"
+            )
+        return
+    st.header("How new ideas are generated / 新想法如何产生")
+    first = ideas[0]
+    st.write(
+        f"Selected gap → {first.required_capability} → "
+        f"{first.original_external_problem} → {first.mechanism_name} → "
+        f"{'; '.join(first.structural_correspondences)} → "
+        f"{first.modification_slot} → candidate idea"
+    )
+    st.header("External mechanism options / 外部机制")
+    for mechanism in st.session_state.mechanisms[:5]:
+        alignment = next((
+            item for item in st.session_state.alignments
+            if item.mechanism_id == mechanism.mechanism_id
+        ), None)
+        with st.expander(f"{mechanism.name} · {mechanism.source_domain}"):
+            st.write({
+                "Original problem": mechanism.original_problem,
+                "Signal": mechanism.observed_signal,
+                "State": mechanism.internal_state,
+                "Trigger": mechanism.trigger_condition,
+                "Response": mechanism.response_rule,
+                "Resource constraint": mechanism.resource_constraint,
+                "Target": mechanism.equilibrium_or_target,
+                "Failure boundary": mechanism.failure_boundary,
+                "Structural match": round(alignment.score, 2) if alignment else "not aligned",
+                "Analogy limitation": "Structural correspondence only; no literal domain equivalence is assumed.",
+            })
+    st.header("Candidate idea portfolio / 候选想法")
+    candidates = {
+        item.candidate_id: item for item in st.session_state.candidate_portfolio
+    }
+    categories = ["Conservative idea", "Balanced idea", "Ambitious idea"]
+    for index, derivation in enumerate(ideas):
+        candidate = candidates[derivation.candidate_id]
+        with st.container(border=True):
+            st.subheader(f"{categories[min(index, 2)]}: {candidate.candidate_name}")
+            st.write({
+                "Problem addressed": derivation.problem_statement,
+                "Starting algorithm": candidate.base_algorithm,
+                "Exact modification slot": derivation.modification_slot,
+                "Borrowed mechanism": derivation.mechanism_name,
+                "Change": candidate.update_rule_delta,
+                "Expected benefit": candidate.expected_improvement,
+                "Main cost": candidate.complexity_delta,
+                "Main risk": candidate.expected_failure_modes[0]
+                if candidate.expected_failure_modes else "unknown",
+                "Nearest known method": ", ".join(derivation.known_method_neighbors)
+                or "not established",
+                "Novelty": derivation.novelty_status,
+                "Feasibility": candidate.confidence,
+            })
+            st.button(
+                "Explain this idea / 解释这个想法",
+                key=f"_select_idea_{index}", type="primary",
+                on_click=select_idea, args=(candidate.candidate_id,),
+            )
+
+
+def render_diagram(spec: dict[str, object]) -> None:
+    st.subheader(str(spec["title"]))
+    try:
+        st.graphviz_chart(str(spec["dot"]), use_container_width=True)
+    except Exception as exc:
+        st.warning(f"Diagram unavailable; text fallback shown. {exc}")
+        st.write(spec["fallback"])
+    with st.expander("Text fallback"):
+        st.write(spec["fallback"])
+
+
+def explanation_markdown(explanation: object) -> str:
+    return "\n\n".join([
+        f"# {explanation.title}",
+        explanation.one_sentence_conclusion,
+        f"## Problem\n{explanation.problem}",
+        f"## Proposed change\n{explanation.proposed_change}",
+        f"## Expected result\n{explanation.expected_result}",
+        "## Supported\n" + "\n".join(f"- {x}" for x in explanation.supported_claims),
+        "## Inferred\n" + "\n".join(f"- {x}" for x in explanation.inferred_claims),
+        "## Unknown\n" + "\n".join(f"- {x}" for x in explanation.unknowns),
+        "## Risks\n" + "\n".join(f"- {x}" for x in explanation.main_risks),
+        f"## Minimal experiment\n```json\n{json.dumps(explanation.minimal_experiment, indent=2)}\n```",
+    ])
+
+
+def explain_idea_page() -> None:
+    st.title("Explain the idea / 解释新想法")
+    candidate = next((
+        item for item in st.session_state.candidate_portfolio
+        if item.candidate_id == st.session_state.selected_idea_id
+    ), None)
+    derivation = next((
+        item for item in st.session_state.current_idea_portfolio
+        if item.candidate_id == st.session_state.selected_idea_id
+    ), None)
+    if not candidate or not derivation:
+        st.info("Select an idea in Part 2.")
+        st.button(
+            "Back to gap analysis / 返回 Gap 分析",
+            on_click=navigate_to, args=(PRIMARY_STEPS[1],),
+        )
+        return
+    st.button(
+        "Back to gap analysis / 返回 Gap 分析",
+        on_click=navigate_to, args=(PRIMARY_STEPS[1],),
+    )
+    if st.session_state.current_result_explanation is None:
+        render_started = time.perf_counter()
+        direction = st.session_state.selected_direction_snapshot
+        diagram_started = time.perf_counter()
+        specs = [
+            evidence_to_idea_spec(direction, derivation),
+            before_after_spec(candidate),
+            mechanism_transfer_spec(derivation),
+            experiment_spec(asdict(candidate.minimal_experiment)),
+        ]
+        st.session_state.ux_performance["diagram_generation_seconds"] = round(
+            time.perf_counter() - diagram_started, 4
+        )
+        st.session_state.current_diagram_specs = specs
+        st.session_state.current_result_explanation = build_idea_explanation(
+            st.session_state.purpose, direction, derivation, candidate, specs
+        )
+        st.session_state.ux_performance["part_3_render_seconds"] = round(
+            time.perf_counter() - render_started, 4
+        )
+    explanation = st.session_state.current_result_explanation
+    st.header(explanation.title)
+    st.success(explanation.one_sentence_conclusion)
+    st.header("BEFORE → CHANGE → EXPECTED RESULT")
+    st.write({
+        "BEFORE": explanation.current_behavior,
+        "CHANGE": explanation.proposed_change,
+        "EXPECTED RESULT": explanation.expected_result,
+    })
+    st.info(
+        f"Exact modification slot: **{explanation.modification_slot}**"
+    )
+    st.header("Why it might work / 为什么可能有效")
+    st.write(explanation.causal_hypothesis)
+    for spec in st.session_state.current_diagram_specs:
+        render_diagram(spec)
+    st.header("What could go wrong / 可能失败的地方")
+    st.write(explanation.main_risks or ("Failure modes remain insufficiently characterized.",))
+    st.subheader("What is supported")
+    st.write(explanation.supported_claims)
+    st.subheader("What is inferred")
+    st.write(explanation.inferred_claims)
+    st.subheader("What is unknown")
+    st.write(explanation.unknowns)
+    st.subheader("What evidence would change the conclusion")
+    st.write(explanation.falsification_tests)
+    st.header("Potential novelty")
+    st.write({
+        "Status": explanation.novelty_status,
+        "Closest known methods": explanation.closest_known_methods,
+        "Qualification": "Novelty remains unverified until a targeted search and expert review.",
+    })
+    experiment = explanation.minimal_experiment
+    st.header("Fastest useful experiment / 最小可用实验")
+    st.write({
+        "Hypothesis": experiment.get("hypothesis"),
+        "Data": experiment.get("dataset"),
+        "Stressor": experiment.get("stressor"),
+        "Base algorithm": experiment.get("base_algorithm"),
+        "Baselines": experiment.get("baselines"),
+        "Ablations": experiment.get("ablations"),
+        "Metrics": experiment.get("metrics"),
+        "Seeds": experiment.get("seeds"),
+        "Success rule": experiment.get("success_rule"),
+        "Failure rule": experiment.get("failure_rule"),
+        "Kill criterion": candidate.kill_criterion or experiment.get("failure_rule"),
+    })
+    st.header("Supporting papers / 支持论文")
+    render_related_papers(st.session_state.selected_direction_snapshot)
+    markdown = explanation_markdown(explanation)
+    st.download_button(
+        "Export research idea as Markdown", markdown,
+        f"{candidate.candidate_id.replace(':', '-')}.md",
+    )
+    st.download_button(
+        "Export structured result as JSON",
+        json.dumps(asdict(explanation), indent=2),
+        f"{candidate.candidate_id.replace(':', '-')}.json",
+    )
+    st.download_button(
+        "Export diagrams as DOT",
+        "\n\n".join(str(item["dot"]) for item in explanation.diagram_specs),
+        f"{candidate.candidate_id.replace(':', '-')}-diagrams.dot",
+    )
+    st.download_button(
+        "Export minimal experiment as Markdown",
+        experiment_to_markdown(candidate.minimal_experiment),
+        f"{candidate.candidate_id.replace(':', '-')}-experiment.md",
+    )
+    with st.expander("Technical details · Raw JSON"):
+        st.json(asdict(explanation))
+
+
+def research_tools_panel() -> None:
+    tool = st.session_state.get("_research_tool", "None")
+    if tool == "None":
+        return
+    st.divider()
+    st.header(f"Research Tools / 研究工具 · {tool}")
+    if tool == "Research run provenance":
+        render_research_run(st.session_state.current_research_run, "ResearchRun")
+        with st.expander("Raw ResearchRun JSON"):
+            run = st.session_state.current_research_run
+            st.json(run.to_dict() if run else {})
+    elif tool == "Full retrieval diagnostics":
+        render_search_diagnostics(st.session_state.ml_search_diagnostics)
+    elif tool == "Coverage and evidence audit":
+        gap_radar_page()
+    elif tool == "Structural alignment audit":
+        alignment_page()
+    elif tool == "Quality Evaluation":
+        quality_evaluation_panel()
+    elif tool == "Annotation tools":
+        annotation_tool()
+    elif tool == "Research memory":
+        memory_page()
+    elif tool == "Build information":
+        import platform
+        import subprocess
+        try:
+            commit = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, check=False,
+            ).stdout.strip() or "unavailable"
+        except OSError:
+            commit = "unavailable"
+        st.write({
+            "Application version": "three-part-ux-v1",
+            "Commit": commit,
+            "Schema version": "run-models-v1",
+            "Pipeline version": PIPELINE_VERSION,
+            "Python": platform.python_version(),
+            "Engine mode": SETTINGS.gap_engine_mode,
+            "Measured workflow timings": st.session_state.ux_performance,
+        })
+
+
 def main() -> None:
     st.set_page_config(page_title="Purpose-Driven Algorithm Discovery", layout="wide")
     initialize_state()
     page = sidebar()
-    handlers = [goal_page, gap_radar_page, evidence_page, mechanism_page, alignment_page,
-                family_page, candidates_page, novelty_page, experiment_page, memory_page]
-    handlers[PAGES.index(page)]()
-    if st.session_state.get("_show_quality_evaluation"):
-        quality_evaluation_panel()
+    handlers = [
+        discover_directions_page, analyze_gap_page, explain_idea_page,
+    ]
+    handlers[PRIMARY_STEPS.index(page)]()
+    research_tools_panel()
     if st.session_state.ml_papers:
         with st.sidebar.expander("Trend radar"):
             st.json(trend_indicators(st.session_state.ml_papers + st.session_state.external_papers))

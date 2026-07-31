@@ -8,6 +8,14 @@ rejections retain their scope. Automatic relevance never writes human labels.
 Gap evidence progresses through evidence events, raw instances, canonical
 families, and promoted gaps.
 
+## Presentation architecture
+
+`ux_models.py` maps existing records into `DirectionSummary`,
+`IdeaDerivation`, and `IdeaExplanation` without changing retrieval or scientific
+scores. `diagram_builders.py` creates deterministic DOT and text-fallback
+specifications without Streamlit or generative dependencies. State invalidation
+is downstream-only for purpose, direction, and idea changes.
+
 ## Capability modes
 
 - `lightweight` (default): TF-IDF, deterministic extraction, coverage matrices,

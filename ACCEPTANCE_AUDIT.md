@@ -6,6 +6,14 @@ task-incompatible focused bindings, stores selected-gap snapshots and alignment
 paths, and separates supported evidence, system inference, and unknowns in the
 primary result view. SciBERT remains gated and citation evidence optional.
 
+The three-part interface exposes exactly three bilingual primary steps.
+Direction cards preserve paper roles and relevance semantics; gap analysis
+separates paper evidence from inference; idea records preserve snapshots,
+alignment paths, and exact modification slots. Part 3 provides four
+deterministic diagrams with fallbacks and keeps raw JSON secondary. Technical
+provenance, evidence audits, evaluation, annotation, and memory remain under
+Research Tools.
+
 Audited after `pytest`, compilation, import, and Streamlit launch checks.
 
 | Criterion | Status | Concrete evidence |

@@ -31,7 +31,8 @@ def main() -> None:
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
     if at.exception:
         raise RuntimeError(f"Streamlit startup exceptions: {at.exception}")
-    assert at.title and at.title[0].value == "Purpose contract"
+    assert at.title and at.title[0].value == "Discover directions / 发现方向"
+    assert len(at.sidebar.radio(key="_primary_step").options) == 3
     print("deployment smoke test: OK")
 
 

@@ -13,3 +13,8 @@ different scopes and must not be substituted for one another.
 Evidence is separated into **SUPPORTED** paper evidence, **SYSTEM-INFERRED**
 deterministic derivation, and **UNKNOWN** missing evidence and validation. The
 selected gap is copied into an immutable-shaped snapshot at selection time.
+
+The primary presentation is now Part 3, **Explain the idea / 解释新想法**. It
+adds deterministic evidence-flow, mechanism-transfer, before/after, and
+experiment diagrams. Simplifying the presentation does not increase scientific
+confidence.

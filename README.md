@@ -14,6 +14,18 @@ python scripts/deployment_smoke_test.py
 The supported cloud/CI Python version is 3.12. Enhanced transformer
 dependencies are not required for this check.
 
+## Three-part primary experience
+
+1. **Discover directions / 发现方向** — search papers and select an
+   evidence-backed candidate direction.
+2. **Analyze the gap / 分析 Gap** — inspect coverage, unresolved evidence,
+   external mechanisms, structural correspondence, and candidate ideas.
+3. **Explain the idea / 解释新想法** — read the exact algorithm change,
+   deterministic diagrams, uncertainty, papers, and falsification experiment.
+
+Architecture-oriented views remain under **Research Tools / 研究工具**. See
+[`THREE_PART_WORKFLOW.md`](THREE_PART_WORKFLOW.md).
+
 目的驱动的跨学科算法发现引擎
 
 This project proposes testable machine-learning research directions by starting with a
