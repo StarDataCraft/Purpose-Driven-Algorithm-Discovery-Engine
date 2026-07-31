@@ -1,5 +1,7 @@
 # Architecture
 
+Presentation uses `candidate_modification()` as the canonical slot-aware view of an algorithm delta. It selects objective, update, memory, routing, aggregation, initialization, stopping, or lifecycle changes from the actual affected component.
+
 ## Calibrated evidence and provenance
 
 Each operation records a stage-scoped `StageRun`; query/source counts,

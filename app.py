@@ -56,7 +56,7 @@ from run_models import utc_now
 from result_explanation import research_result
 from ux_models import (
     PIPELINE_VERSION, build_direction_portfolio, build_idea_derivation,
-    build_idea_explanation,
+    build_idea_explanation, candidate_modification,
 )
 from diagram_builders import (
     before_after_spec, evidence_to_idea_spec, experiment_spec,
@@ -2193,7 +2193,7 @@ def discover_directions_page() -> None:
         with st.container(border=True):
             st.subheader(direction.title)
             st.write(direction.plain_language_summary)
-            st.write({
+            render_fields({
                 "Task": direction.task,
                 "Failure condition": direction.failure_condition,
                 "Algorithm family": direction.affected_algorithm_family,
@@ -2280,6 +2280,12 @@ def render_bullets(values: object, empty: str = "None recorded") -> None:
         st.markdown(f"- {item}")
 
 
+def render_fields(values: dict[str, object]) -> None:
+    """Render readable fields without exposing a Python/JSON representation."""
+    for label, value in values.items():
+        st.markdown(f"**{label}:** {readable_items(value)}")
+
+
 def analyze_gap_page() -> None:
     st.title("Analyze the gap / 分析 Gap")
     direction = st.session_state.selected_direction_snapshot
@@ -2295,7 +2301,7 @@ def analyze_gap_page() -> None:
         on_click=navigate_to, args=(PRIMARY_STEPS[0],),
     )
     st.header("Selected direction / 已选方向")
-    st.write({
+    render_fields({
         "Direction": direction.title,
         "Problem": direction.plain_language_summary,
         "Evidence papers": direction.evidence_bearing_paper_count,
@@ -2307,7 +2313,7 @@ def analyze_gap_page() -> None:
     gap = st.session_state.selected_gap
     st.header("What existing research already covers")
     mitigations = gap.known_mitigations or list(direction.current_solution_families)
-    st.write([
+    render_bullets([
         *mitigations,
         "The retrieved corpus covers the task and observed failure condition.",
         "Coverage completeness depends on available paper metadata.",
@@ -2325,15 +2331,21 @@ def analyze_gap_page() -> None:
             gap.evidence_sentences, gap.evidence_sections
         ) if section != "purpose_contract"
     ]
-    st.write(paper_evidence or ["No direct paper-stated sentence; this gap is system-inferred."])
+    render_bullets(
+        paper_evidence,
+        "No direct paper-stated sentence; this gap is system-inferred.",
+    )
     st.subheader("System inference / 系统推断")
-    st.write({
+    render_fields({
         "Detection": gap.structural_gap_subtype or gap.detection_method,
         "Inference": f"{gap.failure_type} affects {gap.affected_component}.",
         "Metric": gap.primary_metric,
     })
     st.subheader("Known solutions / 已有解法")
-    st.write(mitigations or ["No direct mitigation was confirmed in the searched corpus."])
+    render_bullets(
+        mitigations,
+        "No direct mitigation was confirmed in the searched corpus.",
+    )
     st.subheader("Unresolved remainder / 尚未解决")
     st.write(gap.unresolved_remainder or direction.unresolved_remainder)
     st.subheader("Uncertainty / 不确定性")
@@ -2360,7 +2372,7 @@ def analyze_gap_page() -> None:
     if external:
         st.header("Normalized problem / 规范化问题")
         signature = external.cross_domain_problem_signature
-        st.write({
+        render_fields({
             "System condition": signature.system_condition,
             "Observed failure": signature.observed_failure,
             "Required capability": signature.desired_capability,
@@ -2371,7 +2383,7 @@ def analyze_gap_page() -> None:
         st.header("Selected external domains / 已选外部领域")
         for selection in external.ranked_domain_selections:
             if selection.selected:
-                st.write({
+                render_fields({
                     "Domain": selection.domain,
                     "Why selected": readable_items(selection.reasons),
                     "Matched roles": readable_items(selection.matched_problem_roles),
@@ -2385,7 +2397,7 @@ def analyze_gap_page() -> None:
                 "OFFLINE DEMONSTRATION — external evidence uses bundled papers "
                 "and is not a current literature search."
             )
-        st.write({
+        render_fields({
             "Actual search mode": retrieval.actual_search_mode,
             "Sources": readable_items(retrieval.sources_attempted),
             "Queries": sum(len(items) for items in external.accepted_queries_by_domain.values()),
@@ -2400,7 +2412,7 @@ def analyze_gap_page() -> None:
         })
         with st.expander("Queries, failures, and warnings"):
             st.write(external.accepted_queries_by_domain)
-            st.write({
+            render_fields({
                 "Source failures": retrieval.source_failures or "None",
                 "Warnings": readable_items(external.warnings),
             })
@@ -2409,7 +2421,7 @@ def analyze_gap_page() -> None:
         diagnostics = st.session_state.candidate_run_diagnostics or {}
         if diagnostics.get("error"):
             st.error(diagnostics["error"])
-            st.write({
+            render_fields({
                 "Completed stages": readable_items(diagnostics.get("completed_stages", [])),
                 "Failed stage": diagnostics.get("failed_stage", "unknown"),
                 "Papers obtained": diagnostics.get("paper_count", 0),
@@ -2454,7 +2466,7 @@ def analyze_gap_page() -> None:
             if item.mechanism_id == mechanism.mechanism_id
         ), None)
         with st.expander(f"{mechanism.name} · {mechanism.source_domain}"):
-            st.write({
+            render_fields({
                 "Original problem": mechanism.original_problem,
                 "Signal": mechanism.observed_signal,
                 "State": mechanism.internal_state,
@@ -2468,7 +2480,7 @@ def analyze_gap_page() -> None:
             })
     st.header("Structural alignments / 结构对齐")
     for alignment in external.accepted_alignments if external else []:
-        st.write({
+        render_fields({
             "Mechanism": alignment.mechanism_id,
             "Gap field": gap.failure_type,
             "Mechanism field": next((
@@ -2490,12 +2502,12 @@ def analyze_gap_page() -> None:
         candidate = candidates[derivation.candidate_id]
         with st.container(border=True):
             st.subheader(f"{categories[min(index, 2)]}: {candidate.candidate_name}")
-            st.write({
+            render_fields({
                 "Problem addressed": derivation.problem_statement,
                 "Starting algorithm": candidate.base_algorithm,
                 "Exact modification slot": derivation.modification_slot,
                 "Borrowed mechanism": derivation.mechanism_name,
-                "Change": candidate.update_rule_delta,
+                "Change": candidate_modification(candidate),
                 "Expected benefit": candidate.expected_improvement,
                 "Main cost": candidate.complexity_delta,
                 "Main risk": candidate.expected_failure_modes[0]
@@ -2582,8 +2594,22 @@ def explain_idea_page() -> None:
     explanation = st.session_state.current_result_explanation
     st.header(explanation.title)
     st.success(explanation.one_sentence_conclusion)
+    st.header("Problem / 问题")
+    st.write(explanation.problem)
+    st.header("Current behavior / 当前做法")
+    st.write(explanation.current_behavior)
+    st.header("Proposed change / 修改内容")
+    render_fields({
+        "Exact modification slot": explanation.modification_slot,
+        "New state": explanation.new_state_variables,
+        "Trigger": explanation.new_trigger,
+        "Rule": explanation.new_rule,
+        "Information available at inference": explanation.inference_information,
+    })
+    st.header("Expected result / 预期结果")
+    st.write(explanation.expected_result)
     st.header("BEFORE → CHANGE → EXPECTED RESULT")
-    st.write({
+    render_fields({
         "BEFORE": explanation.current_behavior,
         "CHANGE": explanation.proposed_change,
         "EXPECTED RESULT": explanation.expected_result,
@@ -2609,14 +2635,19 @@ def explain_idea_page() -> None:
     st.subheader("What evidence would change the conclusion")
     render_bullets(explanation.falsification_tests)
     st.header("Potential novelty")
-    st.write({
+    render_fields({
         "Status": explanation.novelty_status,
         "Closest known methods": readable_items(explanation.closest_known_methods),
         "Qualification": "Novelty remains unverified until a targeted search and expert review.",
     })
+    st.header("Closest known methods / 最接近的已有方法")
+    render_bullets(
+        explanation.closest_known_methods,
+        "No close method was established by the searched evidence.",
+    )
     experiment = explanation.minimal_experiment
     st.header("Fastest useful experiment / 最小可用实验")
-    st.write({
+    render_fields({
         "Hypothesis": experiment.get("hypothesis"),
         "Data": experiment.get("dataset"),
         "Stressor": experiment.get("stressor"),

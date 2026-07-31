@@ -1,5 +1,7 @@
 # Research Result explanation guide
 
+Candidate changes are resolved from the delta field matching the affected component. Aggregation, routing, memory, objective, initialization, stopping, and component lifecycle are not incorrectly treated as update-rule changes.
+
 The Candidate Algorithms page starts with **Research Result / 研究结果**. It is
 the primary interpretation layer; raw JSON is retained only in Technical
 details.

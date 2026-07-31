@@ -1,5 +1,7 @@
 # Benchmark-driven quality evaluation
 
+For readability, verify that the visible proposal—not raw JSON—names the problem, current behavior, exact slot, state, trigger, rule, inference inputs, expected result, closest methods, main risk, experiment, and kill criterion.
+
 Enhanced mode lazily loads `allenai/specter2_base` with the
 `allenai/specter2` retrieval/search adapter while preserving sparse and dense
 scores. It is not recommended without reviewed-label Precision@5/10/20 and

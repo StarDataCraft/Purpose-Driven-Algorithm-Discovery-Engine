@@ -1,5 +1,7 @@
 # Purpose-Driven Cross-Disciplinary Algorithm Discovery Engine
 
+The primary UI is a self-contained three-part workflow: discover bounded research directions, automatically retrieve external evidence and derive ideas, then read one conclusion-first proposal with explicit state, trigger, rule, and deterministic diagrams. Technical JSON is secondary.
+
 > Calibrated evidence flow: deduplicated candidate papers, automatic relevance,
 > human-reviewed relevance, and evidence-bearing papers are distinct. Raw gap
 > instances consolidate into canonical families; only evidence-gated promoted

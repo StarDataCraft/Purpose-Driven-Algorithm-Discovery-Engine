@@ -16,6 +16,36 @@ from models import (
 PIPELINE_VERSION = "three-part-ux-v1"
 
 
+def candidate_modification(candidate: AlgorithmCandidate) -> str:
+    """Return the concrete delta for the candidate's affected component."""
+    deltas = {
+        "objective": candidate.objective_delta,
+        "update_rule": candidate.update_rule_delta,
+        "feedback_control": candidate.update_rule_delta,
+        "state_estimation": candidate.update_rule_delta,
+        "initialization": candidate.initialization_delta,
+        "memory": candidate.memory_delta,
+        "routing": candidate.routing_delta,
+        "expert_selection": candidate.routing_delta,
+        "aggregation": candidate.aggregation_delta,
+        "stopping": candidate.stopping_delta,
+        "component_birth_death": candidate.component_lifecycle_delta,
+    }
+    delta = deltas.get(candidate.affected_component, "")
+    if delta:
+        return delta
+    for fallback in (
+        candidate.update_rule_delta, candidate.inference_delta,
+        candidate.objective_delta, candidate.memory_delta,
+        candidate.routing_delta, candidate.aggregation_delta,
+        candidate.initialization_delta, candidate.stopping_delta,
+        candidate.component_lifecycle_delta,
+    ):
+        if fallback:
+            return fallback
+    return "No concrete modification was generated."
+
+
 @dataclass(frozen=True)
 class DirectionSummary:
     direction_id: str
@@ -143,15 +173,24 @@ def build_direction_portfolio(
         if not gap:
             continue
         roles = {}
-        actual_paper_ids = [
+        contextual_paper_ids = [
             paper_id for paper_id in family.supporting_paper_ids
             if paper_id in by_paper
         ]
-        for paper_id in actual_paper_ids:
+        direct_paper_ids = {
+            paper_id
+            for member in family.member_gaps
+            for paper_id, section in zip(
+                member.evidence_paper_ids, member.evidence_sections
+            )
+            if section != "purpose_contract" and paper_id in by_paper
+        }
+        for paper_id in contextual_paper_ids:
             paper = by_paper.get(paper_id)
             text = f"{paper.title} {paper.abstract}".casefold() if paper else ""
             role = (
-                "current solution" if any(x in text for x in ("mitigat", "solution", "improv"))
+                "context for system inference" if paper_id not in direct_paper_ids
+                else "current solution" if any(x in text for x in ("mitigat", "solution", "improv"))
                 else "empirical failure evidence" if any(x in text for x in ("degrad", "fail", "slow"))
                 else "direct gap evidence"
             )
@@ -159,16 +198,16 @@ def build_direction_portfolio(
         uncertainties = list(family.rejection_reasons)
         if family.abstract_only_count:
             uncertainties.append("Some support is abstract-only.")
-        if len(actual_paper_ids) < 3:
+        if len(direct_paper_ids) < 3:
             uncertainties.append("Limited independent corroboration.")
         output.append(DirectionSummary(
             family.family_id, run_id, family.representative_title,
             family.plain_language_statement, gap.task, gap.application_context,
             gap.failure_type, gap.affected_algorithm_family,
             family.binding_granularity, (family.family_id,),
-            tuple(family.evidence_types), tuple(actual_paper_ids),
-            len(actual_paper_ids), min(
-                family.independent_source_count, len(actual_paper_ids)
+            tuple(family.evidence_types), tuple(contextual_paper_ids),
+            len(direct_paper_ids), min(
+                family.independent_source_count, len(direct_paper_ids)
             ),
             roles, tuple(family.known_mitigations),
             "assessed" if family.known_mitigations else "no direct solution confirmed",
@@ -224,7 +263,13 @@ def build_idea_explanation(
     diagram_specs: list[dict[str, Any]],
 ) -> IdeaExplanation:
     supported = tuple(dict.fromkeys([
-        f"Evidence papers identify: {direction.failure_condition}.",
+        (
+            f"{direction.evidence_bearing_paper_count} paper(s) directly support "
+            f"the recorded failure condition: {direction.failure_condition}."
+            if direction.evidence_bearing_paper_count
+            else "Retrieved papers provide context, but no direct paper-stated "
+                 "failure sentence supports this direction."
+        ),
         f"The external mechanism records signal '{derivation.mechanism_signal}' "
         f"and response '{derivation.mechanism_response}'.",
     ]))
@@ -238,14 +283,16 @@ def build_idea_explanation(
         f"Modify {candidate.base_algorithm}'s {candidate.affected_component} "
         f"using {derivation.mechanism_name} to address "
         f"{direction.failure_condition}.",
-        direction.plain_language_summary, candidate.base_algorithm,
-        candidate.update_rule_delta or candidate.inference_delta,
+        direction.plain_language_summary,
+        f"{candidate.base_algorithm} uses its existing "
+        f"{candidate.affected_component} without the proposed mechanism-triggered rule.",
+        candidate_modification(candidate),
         candidate.expected_improvement,
         f"If {derivation.mechanism_signal} identifies the relevant condition, "
         f"{derivation.mechanism_response} may avoid relearning from scratch.",
         candidate.base_algorithm, candidate.affected_component,
         tuple(candidate.new_state_variables), derivation.mechanism_trigger,
-        candidate.update_rule_delta, tuple(candidate.required_training_information),
+        candidate_modification(candidate), tuple(candidate.required_training_information),
         tuple(candidate.required_inference_information),
         candidate.complexity_delta, candidate.memory_delta, purpose.use_case,
         tuple(candidate.must_not_degrade),

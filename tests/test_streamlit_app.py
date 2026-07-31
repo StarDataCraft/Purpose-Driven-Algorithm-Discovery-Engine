@@ -87,6 +87,14 @@ def test_part_2_derives_operational_mechanisms_and_idea_portfolio():
         derivation.modification_slot
         for derivation in app.session_state["current_idea_portfolio"]
     )
+    assert all(
+        any((candidate.update_rule_delta, candidate.objective_delta,
+             candidate.memory_delta, candidate.routing_delta,
+             candidate.aggregation_delta, candidate.initialization_delta,
+             candidate.stopping_delta, candidate.component_lifecycle_delta,
+             candidate.inference_delta))
+        for candidate in app.session_state["candidate_portfolio"]
+    )
     assert not app.exception
 
 
@@ -96,13 +104,20 @@ def test_part_3_result_diagrams_experiment_and_secondary_json():
     explanation = app.session_state["current_result_explanation"]
     assert explanation.one_sentence_conclusion
     assert explanation.modification_slot
+    assert explanation.proposed_change
+    assert "No concrete modification" not in explanation.proposed_change
     assert explanation.supported_claims
     assert explanation.inferred_claims
     assert explanation.unknowns
     assert len(app.get("graphviz_chart")) >= 3
     assert len(app.session_state["current_diagram_specs"]) >= 3
     headers = " ".join(item.value for item in app.header)
+    assert "Problem / 问题" in headers
+    assert "Current behavior / 当前做法" in headers
+    assert "Proposed change / 修改内容" in headers
+    assert "Expected result / 预期结果" in headers
     assert "BEFORE → CHANGE → EXPECTED RESULT" in headers
+    assert "Closest known methods" in headers
     assert "Fastest useful experiment" in headers
     assert "Supporting papers" in headers
     assert any("Raw JSON" in item.label for item in app.expander)

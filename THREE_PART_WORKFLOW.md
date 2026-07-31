@@ -1,5 +1,7 @@
 # Three-part research workflow
 
+Part 3 explicitly renders Problem, Current behavior, Proposed change, Expected result, closest methods, risks, uncertainty, supporting papers, and the minimum experiment. The proposed change exposes the exact slot, new state, trigger, rule, and inference-time information before technical details.
+
 The primary interface presents the unchanged scientific pipeline in three
 researcher-oriented parts.
 

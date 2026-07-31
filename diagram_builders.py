@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ux_models import DirectionSummary, IdeaDerivation
+from ux_models import DirectionSummary, IdeaDerivation, candidate_modification
 from models import AlgorithmCandidate
 
 
@@ -24,8 +24,13 @@ def evidence_to_idea_spec(
     direction: DirectionSummary, derivation: IdeaDerivation,
 ) -> dict[str, Any]:
     labels = [
-        direction.failure_condition, derivation.required_capability,
-        derivation.mechanism_name, derivation.modification_slot,
+        f"Relevant/context papers: {direction.evidence_bearing_paper_count}",
+        f"Gap family: {direction.title}",
+        f"Unresolved: {direction.unresolved_remainder}",
+        f"Capability: {derivation.required_capability}",
+        f"Mechanism: {derivation.mechanism_name}",
+        f"Modification: {derivation.modification_slot}",
+        f"Expected metric: {direction.primary_metric}",
     ]
     return {
         "diagram_id": "evidence_to_idea", "title": "Evidence → gap → mechanism → idea",
@@ -39,7 +44,10 @@ def evidence_to_idea_spec(
 
 def before_after_spec(candidate: AlgorithmCandidate) -> dict[str, Any]:
     before = f"BEFORE: {candidate.base_algorithm}"
-    change = f"CHANGE: {candidate.affected_component} · {', '.join(candidate.selected_operators)}"
+    change = (
+        f"CHANGE: {candidate.affected_component} · "
+        f"{candidate_modification(candidate)}"
+    )
     expected = f"EXPECTED: {candidate.expected_improvement}"
     return {
         "diagram_id": "before_after", "title": "Before → change → expected result",
@@ -52,23 +60,29 @@ def before_after_spec(candidate: AlgorithmCandidate) -> dict[str, Any]:
 
 
 def mechanism_transfer_spec(derivation: IdeaDerivation) -> dict[str, Any]:
-    external = (
-        f"{derivation.external_domain}: {derivation.mechanism_signal} → "
-        f"{derivation.mechanism_state} → {derivation.mechanism_response}"
-    )
-    ml = (
-        f"ML: {derivation.modification_slot} → "
-        f"{', '.join(derivation.selected_operators)}"
-    )
+    mappings = [
+        ("signal", derivation.mechanism_signal, "ML observable signal"),
+        ("state", derivation.mechanism_state,
+         f"state supporting {derivation.modification_slot}"),
+        ("trigger", derivation.mechanism_trigger, "ML update trigger"),
+        ("response", derivation.mechanism_response,
+         ", ".join(derivation.selected_operators)),
+        ("risk", "; ".join(derivation.analogy_boundaries),
+         "ML transfer failure risk"),
+    ]
+    nodes = []
+    edges = []
+    fallback_rows = []
+    for index, (role, external, ml) in enumerate(mappings):
+        left, right = f"external_{index}", f"ml_{index}"
+        nodes.extend([(left, f"External {role}: {external}"),
+                      (right, f"ML {role}: {ml}")])
+        edges.append((left, right, "maps to"))
+        fallback_rows.append(f"External {role}: {external} → ML {role}: {ml}")
     return {
         "diagram_id": "mechanism_transfer", "title": "Mechanism transfer map",
-        "dot": _dot(
-            [("external", external), ("boundary", "Structural analogy only"),
-             ("ml", ml)],
-            [("external", "boundary", "abstract"), ("boundary", "ml", "translate")],
-        ),
-        "fallback": f"{external} ↔ {ml}. Boundary: "
-                    f"{'; '.join(derivation.analogy_boundaries)}",
+        "dot": _dot(nodes, edges),
+        "fallback": "\n".join(fallback_rows),
     }
 
 

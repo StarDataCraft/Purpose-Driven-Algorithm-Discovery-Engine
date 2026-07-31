@@ -1,5 +1,7 @@
 # Acceptance audit
 
+The 2026-07-31 overnight audit adds regression coverage for slot-aware modifications, explicit one-page proposal sections, direct-versus-contextual paper roles, and complete deterministic diagram fallbacks. Final evidence is recorded in `OVERNIGHT_FINAL_REPORT.md`.
+
 The retrieval-calibration iteration separates paper-count semantics, labels
 cache-only provenance explicitly, consolidates raw gaps, blocks weak
 task-incompatible focused bindings, stores selected-gap snapshots and alignment
