@@ -1,5 +1,13 @@
 # Architecture
 
+## Calibrated evidence and provenance
+
+Each operation records a stage-scoped `StageRun`; query/source counts,
+wall-clock and request durations, cache ages, inputs, outputs, acceptances, and
+rejections retain their scope. Automatic relevance never writes human labels.
+Gap evidence progresses through evidence events, raw instances, canonical
+families, and promoted gaps.
+
 ## Capability modes
 
 - `lightweight` (default): TF-IDF, deterministic extraction, coverage matrices,

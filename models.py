@@ -32,6 +32,10 @@ class Paper:
     dense_score: float | None = None
     hybrid_score: float | None = None
     provenance_history: list[dict[str, Any]] = field(default_factory=list)
+    estimated_relevance_score: float = 0.0
+    estimated_relevance_label: str = "ESTIMATED_IRRELEVANT"
+    reviewed_relevance_label: str = ""
+    review_status: str = "UNREVIEWED"
 
 
 @dataclass
@@ -285,6 +289,9 @@ class AlgorithmCandidate:
     strongest_rejection_reason: str = ""
     kill_criterion: str = ""
     research_run_id: str = ""
+    alignment_id: str = ""
+    alignment_acceptance: str = ""
+    selected_gap_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

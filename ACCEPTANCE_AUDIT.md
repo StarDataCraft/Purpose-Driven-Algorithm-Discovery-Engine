@@ -1,5 +1,11 @@
 # Acceptance audit
 
+The retrieval-calibration iteration separates paper-count semantics, labels
+cache-only provenance explicitly, consolidates raw gaps, blocks weak
+task-incompatible focused bindings, stores selected-gap snapshots and alignment
+paths, and separates supported evidence, system inference, and unknowns in the
+primary result view. SciBERT remains gated and citation evidence optional.
+
 Audited after `pytest`, compilation, import, and Streamlit launch checks.
 
 | Criterion | Status | Concrete evidence |

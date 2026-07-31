@@ -25,6 +25,7 @@ class EmbeddingInfo:
     failure: str = ""
     cache_hits: int = 0
     cache_misses: int = 0
+    adapter: str = ""
 
 
 class ScientificEmbeddingBackend(ABC):
@@ -116,8 +117,9 @@ class Specter2EmbeddingBackend(ScientificEmbeddingBackend):
 
     def model_info(self) -> EmbeddingInfo:
         return EmbeddingInfo(
-            "specter2", self.model_name, "local-pretrained",
+            "specter2", "allenai/specter2_base", "local-pretrained",
             not bool(self._failure), self._failure,
+            adapter=self.model_name,
         )
 
 

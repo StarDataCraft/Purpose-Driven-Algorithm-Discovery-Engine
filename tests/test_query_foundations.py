@@ -24,7 +24,9 @@ def test_algorithm_focus_requires_paper_evidence(purpose):
               "Random forest recovery for recurring concept drift", 2025, "openalex")
     ], purpose)
     queries, _ = generate_focused_algorithm_queries(purpose, bindings)
-    assert any("random forest" in query.casefold() for query in queries)
+    # One mentioning paper is retained as family-level evidence, but cannot
+    # establish an exact-algorithm focused search without independent support.
+    assert any("ensemble" in query.casefold() for query in queries)
     assert all("adaboost" not in query.casefold() for query in queries)
 
 

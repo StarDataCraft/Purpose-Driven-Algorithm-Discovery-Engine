@@ -29,6 +29,16 @@ The seed dataset is too small for credible model-performance claims. Any future
 checkpoint must report held-out per-label precision, recall, F1, macro/micro F1,
 calibration, latency, memory use, and contribution/motivation false positives.
 
+## Deployment readiness gate
+
+Production activation requires paper-level splits with no adjacent-sentence
+leakage, at least 50 adjudicated examples for each critical label, macro F1 ≥
+0.75, micro F1 ≥ 0.80, critical-label precision ≥ 0.80 and recall ≥ 0.70,
+expected calibration error ≤ 0.10, and no regression against the rule baseline
+on contribution/motivation false positives. These are project engineering
+thresholds, not universal scientific claims. Until this gate passes, SciBERT
+output is EXPERIMENTAL and cannot promote a gap.
+
 ## Limitations
 
 Weak rules have limited recall on implicit gaps and can conflict. Annotation

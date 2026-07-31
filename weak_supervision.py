@@ -19,6 +19,7 @@ class GapLabel(str, Enum):
     MISSING_EVALUATION = "MISSING_EVALUATION"
     DEPLOYMENT_CONSTRAINT = "DEPLOYMENT_CONSTRAINT"
     RESOURCE_CONSTRAINT = "RESOURCE_CONSTRAINT"
+    EXPERIMENTAL_FAILURE = "EXPERIMENTAL_FAILURE"
     CONTRADICTORY_RESULT = "CONTRADICTORY_RESULT"
     OTHER = "OTHER"
 
@@ -48,6 +49,7 @@ class WeakLabelResult:
 RULES = [
     ("limitation_cue", GapLabel.LIMITATION, r"\b(limitation|limited|struggles?|cannot|however)\b", 1.0),
     ("failure_pattern", GapLabel.FAILURE_CONDITION, r"\b(fails?|degrades?|poor|unstable|sensitive)\b", 1.0),
+    ("experimental_failure", GapLabel.EXPERIMENTAL_FAILURE, r"\b(experiment|trial|evaluation).{0,40}\b(failed|degraded|unstable)\b", .95),
     ("assumption_construction", GapLabel.ASSUMPTION, r"\b(assumes?|requires? complete|depends? on)\b", .95),
     ("future_work", GapLabel.FUTURE_WORK, r"\b(future work|remains? to|should investigate)\b", .9),
     ("missing_evaluation", GapLabel.MISSING_EVALUATION, r"\b(not evaluated|lacks? evaluation|no .* benchmark)\b", 1.0),

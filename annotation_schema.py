@@ -21,6 +21,7 @@ class SentenceAnnotation:
     annotator: str
     annotation_version: str
     adjudication_status: str
+    reviewer_confidence: float = 0.0
     notes: str = ""
 
 

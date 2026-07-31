@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections import Counter
 import time
 from typing import Callable
 
@@ -16,6 +17,7 @@ from coverage_analysis import CoverageGap, CoverageRecord, coverage_gap_to_signa
 from coverage_analysis import detect_coverage_gaps
 from coverage_analysis import extract_coverage_records
 from gap_mining import aggregate_gaps, mine_explicit_gaps
+from gap_consolidation import GapConsolidationResult, consolidate_gaps
 from hybrid_retrieval import RetrievalScore, hybrid_rerank, scientific_query_text
 from known_solution_analysis import KnownSolutionResult, assess_known_solutions
 from models import GapSignature, Paper, PurposeContract
@@ -41,6 +43,7 @@ class StructuralDiscoveryResult:
     research_clusters: list[ResearchCluster]
     semantic_gap_families: list[CanonicalGapFamily]
     known_solution_results: dict[str, KnownSolutionResult]
+    consolidation: GapConsolidationResult
     diagnostics: dict[str, object] = field(default_factory=dict)
 
 
@@ -70,6 +73,7 @@ def discover_structural_gaps(
         purpose.deployment_environment,
     )
 
+    rerank_started = time.perf_counter()
     try:
         ranked_papers, retrieval_scores = hybrid_rerank(
             papers, " ".join(lexical_queries), semantic_query, dense
@@ -89,8 +93,10 @@ def discover_structural_gaps(
             paper.sparse_score = score.sparse_score
             paper.dense_score = score.dense_score
             paper.hybrid_score = score.fusion_score
+    rerank_seconds = time.perf_counter() - rerank_started
 
     limited_papers = ranked_papers[:settings.transformer_max_papers]
+    extraction_started = time.perf_counter()
     records = extract_coverage_records(limited_papers, purpose)
     coverage_gaps = detect_coverage_gaps(
         records, purpose, settings.minimum_coverage_support,
@@ -123,9 +129,11 @@ def discover_structural_gaps(
         *(mismatch_to_signature(item, purpose) for item in mismatches),
         *(contradiction_to_signature(item, purpose) for item in contradictions),
     ]
+    extraction_seconds = time.perf_counter() - extraction_started
 
     clusters: list[ResearchCluster] = []
     semantic_families: list[CanonicalGapFamily] = []
+    clustering_started = time.perf_counter()
     try:
         paper_embeddings = backend.embed_documents(limited_papers) if limited_papers else []
         clusters = cluster_papers(
@@ -148,16 +156,19 @@ def discover_structural_gaps(
             )
     except Exception as exc:
         failures.append(f"clustering fallback: {type(exc).__name__}: {exc}")
+    clustering_seconds = time.perf_counter() - clustering_started
 
+    known_started = time.perf_counter()
     known_solutions = {
         gap.gap_id: assess_known_solutions(gap, limited_papers)
-        for gap in gaps if gap.structural_gap_subtype
+        for gap in gaps
     }
     for gap in gaps:
         result = known_solutions.get(gap.gap_id)
         if result:
             gap.known_mitigations = result.mitigating_methods
             gap.unresolved_remainder = result.unresolved_remainder
+    known_seconds = time.perf_counter() - known_started
 
     # The final production ranking is deterministic and evidence-first.
     gaps.sort(
@@ -167,6 +178,9 @@ def discover_structural_gaps(
         ),
         reverse=True,
     )
+    consolidation_started = time.perf_counter()
+    consolidation = consolidate_gaps(gaps, purpose, known_solutions)
+    consolidation_seconds = time.perf_counter() - consolidation_started
     active_mode = (
         settings.gap_engine_mode
         if dense is not None and backend_info.backend == "specter2"
@@ -197,9 +211,24 @@ def discover_structural_gaps(
         ),
         "paper_processing_seconds": round(time.perf_counter() - started, 4),
         "estimated_memory_tier": "high" if dense is not None else "low",
+        "evidence_event_count": len(consolidation.evidence_events),
+        "raw_gap_instance_count": len(gaps),
+        "canonical_gap_family_count": len(consolidation.families),
+        "promoted_gap_count": len(consolidation.promoted),
+        "exploratory_gap_count": len(consolidation.exploratory),
+        "gap_type_counts": dict(Counter(
+            gap.structural_gap_subtype or gap.gap_type for gap in gaps
+        )),
+        "stage_durations": {
+            "paper_reranking": round(rerank_seconds, 4),
+            "gap_extraction": round(extraction_seconds, 4),
+            "paper_clustering": round(clustering_seconds, 4),
+            "known_solution_search": round(known_seconds, 4),
+            "gap_consolidation": round(consolidation_seconds, 4),
+        },
     }
     return StructuralDiscoveryResult(
         ranked_papers, gaps, retrieval_scores, records, coverage_gaps,
         mismatches, contradictions, clusters, semantic_families,
-        known_solutions, diagnostics,
+        known_solutions, consolidation, diagnostics,
     )

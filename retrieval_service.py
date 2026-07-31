@@ -12,8 +12,9 @@ from app_settings import SETTINGS
 from models import Paper, PurposeContract
 from paper_fetchers import PaperCache, deduplicate_papers, fetch_papers_detailed
 from research_runs import (
-    ResearchRun, SourceRetrievalResult, paper_provenance, utc_now,
+    ResearchRun, SourceRetrievalResult, StageRun, paper_provenance, utc_now,
 )
+from pipeline_quality import apply_estimated_relevance
 from text_processing import fingerprint
 
 FixtureLoader = Callable[..., object]
@@ -41,6 +42,7 @@ def retrieve_corpus(
     fixture_loader: FixtureLoader | None = None,
     fixture_path: str = "",
     engine_mode: str = SETTINGS.gap_engine_mode,
+    stage_name: str = "broad_ml_retrieval",
 ) -> tuple[list[Paper], ResearchRun]:
     """Retrieve papers and derive truth from paper-level provenance."""
     started = time.perf_counter()
@@ -51,11 +53,21 @@ def retrieve_corpus(
     )
     run.ml_queries = list(queries)
     run.query_count = len(queries)
+    run.broad_query_count = len(queries) if stage_name == "broad_ml_retrieval" else 0
+    run.focused_query_count = len(queries) if stage_name == "focused_ml_retrieval" else 0
+    run.external_query_count = len(queries) if stage_name == "external_retrieval" else 0
+    run.total_query_count = len(queries)
     run.cache_ttl_seconds = SETTINGS.cache_ttl_seconds
     sources = sources or ["openalex", "arxiv"]
     run.sources_attempted = list(sources)
     cache = PaperCache(cache_directory)
     all_papers: list[Paper] = []
+    stage = StageRun(
+        stage_id=f"{run.run_id}:{stage_name}", stage_name=stage_name,
+        parent_run_id=run.run_id, started_at=run.created_at_utc,
+        requested_mode=requested_mode, query_count=len(queries),
+        queries=list(queries),
+    )
 
     if requested_mode == "OFFLINE_FIXTURE":
         fixture_papers = fixture_loader() if fixture_loader else []
@@ -77,6 +89,8 @@ def retrieve_corpus(
             unique_returned_count=len(fixture_papers),
             api_status="fixture loaded", started_at=run.created_at_utc,
             completed_at=utc_now(),
+            actual_origin="OFFLINE_FIXTURE",
+            paper_ids=[paper.paper_id for paper in fixture_papers],
         ))
     else:
         run.live_request_attempted = requested_mode == "LIVE"
@@ -107,6 +121,9 @@ def retrieve_corpus(
                     run.cache_age_seconds = max(
                         run.cache_age_seconds, time.time() - created_at
                     )
+                    result.cache_age_seconds.append(time.time() - created_at)
+                    result.actual_origin = "CACHE_ONLY"
+                    result.api_status = "not_called_cache_hit"
                     for rank, paper in enumerate(cached_papers, 1):
                         paper_provenance(
                             paper, f"cache_{source}", f"q:{query_index}",
@@ -132,6 +149,9 @@ def retrieve_corpus(
                         )
                     else:
                         result.success_count += 1
+                        result.actual_origin = (
+                            "MIXED" if result.cache_hits else "LIVE"
+                        )
                     result.raw_returned_count += len(fetched)
                     result.api_status = "success" if fetched else "empty"
                     for rank, paper in enumerate(fetched, 1):
@@ -149,6 +169,7 @@ def retrieve_corpus(
                     time.sleep(SETTINGS.rate_limit_seconds)
             unique_source = deduplicate_papers(source_papers)
             result.unique_returned_count = len(unique_source)
+            result.paper_ids = [paper.paper_id for paper in unique_source]
             result.completed_at = utc_now()
             result.duration_seconds = round(time.perf_counter() - source_started, 4)
             result.rate_limit_wait_seconds = (
@@ -185,6 +206,8 @@ def retrieve_corpus(
                 unique_returned_count=len(fixture_papers),
                 fallback_contribution=len(fixture_papers),
                 started_at=utc_now(), completed_at=utc_now(),
+                actual_origin="OFFLINE_FIXTURE",
+                paper_ids=[paper.paper_id for paper in fixture_papers],
             ))
 
     run.raw_paper_count = max(
@@ -196,8 +219,54 @@ def retrieve_corpus(
         papers = papers[:maximum_total]
         run.truncation_applied = True
         run.truncation_reason = f"Maximum total papers limited the corpus to {maximum_total}."
+    apply_estimated_relevance(papers, purpose)
     run.finalize_from_papers(papers)
     run.retrieval_duration_seconds = round(time.perf_counter() - started, 4)
+    run.overall_wall_clock_duration_seconds = run.retrieval_duration_seconds
+    run.sum_source_request_duration_seconds = round(sum(
+        item.duration_seconds for item in run.source_results
+    ), 4)
+    stage.completed_at = utc_now()
+    stage.wall_clock_duration_seconds = run.retrieval_duration_seconds
+    stage.actual_mode = run.actual_search_mode
+    stage.source_results = list(run.source_results)
+    stage.raw_input_count = run.raw_paper_count
+    stage.output_count = len(papers)
+    stage.accepted_count = run.automatically_relevant_paper_count
+    stage.rejected_count = len(papers) - stage.accepted_count
+    stage.cache_hits = sum(item.cache_hits for item in run.source_results)
+    stage.cache_misses = sum(item.cache_misses for item in run.source_results)
+    stage.sum_source_request_duration_seconds = (
+        run.sum_source_request_duration_seconds
+    )
+    stage.truncation = run.truncation_reason
+    stage.model_backend = "source adapters"
+    stage.model_version = "retrieval-service-v2"
+    stage.metadata["query_performance"] = [{
+        "query_id": f"q:{index}",
+        "query": query,
+        "retained_paper_count": sum(
+            f"q:{index}" in paper.query_ids for paper in papers
+        ),
+        "automatically_relevant_count": sum(
+            f"q:{index}" in paper.query_ids
+            and paper.estimated_relevance_label in {
+                "ESTIMATED_HIGH", "ESTIMATED_MEDIUM",
+            }
+            for paper in papers
+        ),
+        "live_paper_count": sum(
+            f"q:{index}" in paper.query_ids
+            and paper.retrieval_origin.startswith("live_")
+            for paper in papers
+        ),
+        "cache_paper_count": sum(
+            f"q:{index}" in paper.query_ids
+            and paper.retrieval_origin.startswith("cache_")
+            for paper in papers
+        ),
+    } for index, query in enumerate(queries)]
+    run.stages.append(stage)
     if run.actual_search_mode == "FAILED":
         run.errors.append("No usable literature corpus was produced.")
     return papers, run

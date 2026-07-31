@@ -1,5 +1,11 @@
 # Benchmark-driven quality evaluation
 
+Enhanced mode lazily loads `allenai/specter2_base` with the
+`allenai/specter2` retrieval/search adapter while preserving sparse and dense
+scores. It is not recommended without reviewed-label Precision@5/10/20 and
+nDCG@10/20 results showing benefit (or parity with a documented benefit).
+Without reviewed labels its quality status is **UNVALIDATED**.
+
 The evaluation harness measures where the production pipeline loses scientific
 quality. Passing software tests, returning papers, or generating candidates is
 not treated as evidence of scientific validity.

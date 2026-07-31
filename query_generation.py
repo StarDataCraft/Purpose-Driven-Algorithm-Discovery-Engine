@@ -37,6 +37,11 @@ class AlgorithmBindingEvidence:
     confidence: float
     evidence_paper_ids: list[str]
     evidence_sentences: list[str]
+    title_mentions: int = 0
+    failure_context_mentions: int = 0
+    task_compatible: bool = True
+    binding_granularity: str = "unspecified"
+    selection_reason: str = ""
 
 
 @dataclass
@@ -153,13 +158,35 @@ def detect_algorithm_bindings(
     papers: list[Paper], purpose: PurposeContract,
 ) -> list[AlgorithmBindingEvidence]:
     records = []
+    recurring_tabular = (
+        "recurr" in purpose.current_failure.casefold()
+        and "tabular" in purpose.data_type.casefold()
+    )
+    compatible_names = {
+        "random forest", "adaboost", "gradient boosted trees",
+        "decision tree", "mixture of experts", "continual learning systems",
+    }
     for algorithm in load_algorithm_library().values():
         direct_ids, alias_ids, sentences = set(), set(), []
+        title_ids, context_ids = set(), set()
         for paper in papers:
             text = f"{paper.title}. {paper.abstract}"
             if re.search(rf"\b{re.escape(algorithm.name)}\b", text, re.I):
                 direct_ids.add(paper.paper_id)
                 sentences.append(text[:300])
+                if re.search(
+                    rf"\b{re.escape(algorithm.name)}\b", paper.title, re.I
+                ):
+                    title_ids.add(paper.paper_id)
+                for sentence in re.split(r"(?<=[.!?])\s+", text):
+                    if (
+                        re.search(rf"\b{re.escape(algorithm.name)}\b", sentence, re.I)
+                        and any(term in sentence.casefold() for term in (
+                            "recurr", "drift", "recovery", "missing",
+                            "cluster", "failure", "degrad",
+                        ))
+                    ):
+                        context_ids.add(paper.paper_id)
             elif any(re.search(rf"\b{re.escape(alias)}\b", text, re.I)
                      for alias in algorithm.aliases):
                 alias_ids.add(paper.paper_id)
@@ -172,18 +199,37 @@ def detect_algorithm_bindings(
             and any(term in f"{paper.title} {paper.abstract}".casefold()
                     for term in purpose.current_failure.casefold().split())
         ]
-        confidence = min(
-            .98, .25 + .15 * len(direct_ids) + .08 * len(alias_ids)
-            + .08 * len({paper.source for paper in papers if paper.paper_id in ids})
+        source_count = len({
+            paper.source for paper in papers if paper.paper_id in ids
+        })
+        compatible = not recurring_tabular or algorithm.name.casefold() in compatible_names
+        confidence = min(.98, (
+            .12 + .10 * len(direct_ids) + .05 * len(alias_ids)
+            + .12 * len(title_ids) + .12 * len(context_ids)
+            + .08 * source_count + (.12 if compatible else -.3)
+        ))
+        strong_exact = (
+            confidence >= .65 and len(context_ids) >= 2
+            and source_count >= 2 and compatible
+        )
+        granularity = (
+            "exact algorithm" if strong_exact
+            else "algorithm family" if confidence >= .4 and compatible
+            else "broad method class" if confidence >= .25
+            else "unspecified"
+        )
+        reason = (
+            f"{len(ids)} mentioning papers; {len(context_ids)} target-failure "
+            f"context mentions; {source_count} sources; "
+            f"task compatible={compatible}; granularity={granularity}"
         )
         records.append(AlgorithmBindingEvidence(
             algorithm.name, algorithm.family, len(direct_ids), len(alias_ids),
-            len(ids), len(ids), len({
-                paper.source for paper in papers if paper.paper_id in ids
-            }), len(ids) / max(1, len(papers)),
+            len(ids), len(ids), source_count, len(ids) / max(1, len(papers)),
             len(relevant) / max(1, len(ids)),
             "explicit paper mention" if direct_ids else "metadata classification",
-            round(confidence, 3), sorted(ids), sentences[:5],
+            round(max(0.0, confidence), 3), sorted(ids), sentences[:5],
+            len(title_ids), len(context_ids), compatible, granularity, reason,
         ))
     return sorted(
         records, key=lambda item: (item.confidence, item.paper_count), reverse=True
@@ -194,12 +240,21 @@ def generate_focused_algorithm_queries(
     purpose: PurposeContract, bindings: list[AlgorithmBindingEvidence],
     confidence_threshold: float = .45,
 ) -> tuple[list[str], QueryAudit]:
-    supported = [item for item in bindings if item.confidence >= confidence_threshold][:4]
+    supported = [
+        item for item in bindings
+        if item.confidence >= confidence_threshold
+        and item.task_compatible
+        and item.binding_granularity in {"exact algorithm", "algorithm family"}
+    ][:4]
     candidates = []
     for item in supported:
+        subject = (
+            item.algorithm if item.binding_granularity == "exact algorithm"
+            else item.family.replace("_", " ")
+        )
         candidates.extend([
-            f"{item.algorithm} recurring concept drift recovery",
-            f"{item.algorithm} concept recurrence adaptation delay",
+            f"{subject} recurring concept drift recovery",
+            f"{subject} concept recurrence adaptation delay",
         ])
     if not supported:
         candidates = [

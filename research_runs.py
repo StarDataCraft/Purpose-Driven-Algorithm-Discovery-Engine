@@ -37,6 +37,72 @@ class SourceRetrievalResult:
     cache_hits: int = 0
     cache_misses: int = 0
     fallback_contribution: int = 0
+    actual_origin: str = ""
+    cache_age_seconds: list[float] = field(default_factory=list)
+    paper_ids: list[str] = field(default_factory=list)
+    domain: str = ""
+    mechanism_bearing_paper_count: int = 0
+
+
+@dataclass
+class StageRun:
+    stage_id: str
+    stage_name: str
+    parent_run_id: str
+    started_at: str
+    completed_at: str = ""
+    wall_clock_duration_seconds: float = 0.0
+    requested_mode: str = ""
+    actual_mode: str = ""
+    query_count: int = 0
+    queries: list[str] = field(default_factory=list)
+    source_results: list[SourceRetrievalResult] = field(default_factory=list)
+    raw_input_count: int = 0
+    output_count: int = 0
+    accepted_count: int = 0
+    rejected_count: int = 0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    truncation: str = ""
+    model_backend: str = ""
+    model_version: str = ""
+    threshold_version: str = "quality-thresholds-v1"
+    sum_source_request_duration_seconds: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class QualityWarning:
+    warning_id: str
+    severity: str
+    stage: str
+    code: str
+    title: str
+    explanation: str
+    observed_value: str
+    expected_range: str
+    recommended_action: str
+
+
+@dataclass(frozen=True)
+class SelectedGapSnapshot:
+    gap_id: str
+    title: str
+    plain_language_statement: str
+    gap_type: str
+    affected_task: str
+    affected_algorithm_family: str
+    binding_granularity: str
+    failure_condition: str
+    affected_metric: str
+    evidence_papers: tuple[str, ...]
+    known_solutions: tuple[str, ...]
+    unresolved_remainder: str
+    confidence: float
+    selected_timestamp: str
+    parent_run_id: str
 
 
 @dataclass
@@ -70,12 +136,32 @@ class ResearchRun:
     raw_paper_count: int = 0
     deduplicated_paper_count: int = 0
     relevant_paper_count: int = 0
+    candidate_paper_count: int = 0
+    automatically_relevant_paper_count: int = 0
+    human_reviewed_paper_count: int = 0
+    human_confirmed_relevant_paper_count: int = 0
+    evidence_bearing_paper_count: int = 0
+    papers_used_for_gap_generation: int = 0
+    papers_used_for_known_solution_search: int = 0
     paper_ids: list[str] = field(default_factory=list)
     source_count: int = 0
     query_count: int = 0
+    broad_query_count: int = 0
+    focused_query_count: int = 0
+    external_query_count: int = 0
+    total_query_count: int = 0
+    unique_source_count: int = 0
+    source_stage_result_count: int = 0
     truncation_applied: bool = False
     truncation_reason: str = ""
     retrieval_duration_seconds: float = 0.0
+    overall_wall_clock_duration_seconds: float = 0.0
+    sum_source_request_duration_seconds: float = 0.0
+    newest_cache_age_seconds: float = 0.0
+    oldest_cache_age_seconds: float = 0.0
+    median_cache_age_seconds: float = 0.0
+    expired_cache_count: int = 0
+    fresh_cache_count: int = 0
     structural_gap_count: int = 0
     mechanism_count: int = 0
     candidate_count: int = 0
@@ -86,6 +172,15 @@ class ResearchRun:
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     stage_records: dict[str, dict[str, Any]] = field(default_factory=dict)
+    stages: list[StageRun] = field(default_factory=list)
+    quality_warnings: list[QualityWarning] = field(default_factory=list)
+    evidence_event_count: int = 0
+    raw_gap_instance_count: int = 0
+    canonical_gap_family_count: int = 0
+    promoted_gap_count: int = 0
+    exploratory_gap_count: int = 0
+    selected_gap_snapshot: dict[str, Any] = field(default_factory=dict)
+    alignment_funnel: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -127,11 +222,44 @@ class ResearchRun:
         self.actual_publication_year_min = min(years) if years else 0
         self.actual_publication_year_max = max(years) if years else 0
         self.deduplicated_paper_count = len(papers)
-        self.relevant_paper_count = len(papers)
+        self.candidate_paper_count = len(papers)
+        self.automatically_relevant_paper_count = sum(
+            paper.estimated_relevance_label in {
+                "ESTIMATED_HIGH", "ESTIMATED_MEDIUM"
+            } for paper in papers
+        )
+        self.human_reviewed_paper_count = sum(
+            paper.review_status == "REVIEWED" for paper in papers
+        )
+        self.human_confirmed_relevant_paper_count = sum(
+            paper.reviewed_relevance_label in {"HIGHLY_RELEVANT", "RELEVANT"}
+            for paper in papers
+        )
+        # Backward-compatible field: now explicitly mirrors automatic relevance.
+        self.relevant_paper_count = self.automatically_relevant_paper_count
         self.paper_ids = [paper.paper_id for paper in papers]
         self.source_count = len({
             paper.original_source or paper.source for paper in papers
         })
+        self.unique_source_count = self.source_count
+        self.source_stage_result_count = len(self.source_results)
+        ages = [
+            age for result in self.source_results
+            for age in result.cache_age_seconds
+        ]
+        if ages:
+            ordered = sorted(ages)
+            self.newest_cache_age_seconds = ordered[0]
+            self.oldest_cache_age_seconds = ordered[-1]
+            middle = len(ordered) // 2
+            self.median_cache_age_seconds = (
+                ordered[middle] if len(ordered) % 2
+                else (ordered[middle - 1] + ordered[middle]) / 2
+            )
+            self.fresh_cache_count = sum(
+                age <= self.cache_ttl_seconds for age in ages
+            )
+            self.expired_cache_count = len(ages) - self.fresh_cache_count
         self.cache_used = has_cache
         self.live_request_succeeded = has_live
 

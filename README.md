@@ -1,5 +1,10 @@
 # Purpose-Driven Cross-Disciplinary Algorithm Discovery Engine
 
+> Calibrated evidence flow: deduplicated candidate papers, automatic relevance,
+> human-reviewed relevance, and evidence-bearing papers are distinct. Raw gap
+> instances consolidate into canonical families; only evidence-gated promoted
+> gaps appear in the main selector.
+
 目的驱动的跨学科算法发现引擎
 
 This project proposes testable machine-learning research directions by starting with a

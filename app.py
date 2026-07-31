@@ -39,8 +39,9 @@ from query_generation import (
     generate_problem_queries, normalize_cross_domain_problem,
     select_external_domains,
 )
-from research_runs import ResearchRun
+from research_runs import ResearchRun, SelectedGapSnapshot, StageRun
 from retrieval_service import retrieve_corpus
+from pipeline_quality import generate_quality_warnings
 from research_memory import ResearchMemory
 from search_engine import search_candidates
 from signatures import load_mechanism_seeds
@@ -51,6 +52,7 @@ from evaluation.report_generation import report_json, report_markdown
 from evaluation.run_benchmark import run_offline_benchmark
 from evaluation.schemas import HumanReview
 from research_runs import utc_now
+from result_explanation import research_result
 
 PAGES = [
     "1 · Goal setup", "2 · Latest ML/DL gap radar", "3 · Gap evidence",
@@ -212,6 +214,9 @@ def initialize_state() -> None:
         "problem_query_audit": None, "focused_query_audit": None,
         "domain_selections": [], "cross_domain_signature": None,
         "quality_evaluation_report": None,
+        "evidence_events": [], "canonical_gap_families": [],
+        "promoted_gap_families": [], "exploratory_gap_families": [],
+        "promoted_gaps": [], "exploratory_gaps": [],
         "engine_diagnostics": engine_state_defaults(SETTINGS),
     }
     for key, value in defaults.items():
@@ -231,6 +236,19 @@ def apply_discovery_result(result: StructuralDiscoveryResult) -> None:
     st.session_state.contradictory_gaps = result.contradictions
     st.session_state.research_clusters = result.research_clusters
     st.session_state.known_solution_results = result.known_solution_results
+    st.session_state.evidence_events = result.consolidation.evidence_events
+    st.session_state.canonical_gap_families = result.consolidation.families
+    st.session_state.promoted_gap_families = result.consolidation.promoted
+    st.session_state.exploratory_gap_families = result.consolidation.exploratory
+    by_id = {gap.gap_id: gap for gap in result.gaps}
+    st.session_state.promoted_gaps = [
+        by_id[family.representative_gap_id]
+        for family in result.consolidation.promoted
+    ]
+    st.session_state.exploratory_gaps = [
+        by_id[family.representative_gap_id]
+        for family in result.consolidation.exploratory
+    ]
     configuration_warnings = st.session_state.engine_diagnostics.get(
         "configuration_warnings", []
     )
@@ -238,6 +256,62 @@ def apply_discovery_result(result: StructuralDiscoveryResult) -> None:
         **result.diagnostics,
         "configuration_warnings": configuration_warnings,
     }
+
+
+def record_discovery_stages(
+    run: ResearchRun, result: StructuralDiscoveryResult
+) -> None:
+    durations = result.diagnostics.get("stage_durations", {})
+    stage_values = {
+        "paper_reranking": (len(result.papers), len(result.papers)),
+        "paper_clustering": (len(result.papers), len(result.research_clusters)),
+        "gap_extraction": (
+            len(result.papers), len(result.consolidation.raw_instances)
+        ),
+        "gap_consolidation": (
+            len(result.consolidation.raw_instances),
+            len(result.consolidation.families),
+        ),
+        "known_solution_search": (
+            len(result.consolidation.families),
+            len(result.known_solution_results),
+        ),
+    }
+    for name, (raw_count, output_count) in stage_values.items():
+        seconds = float(durations.get(name, 0))
+        run.stages.append(StageRun(
+            stage_id=f"{run.run_id}:{name}", stage_name=name,
+            parent_run_id=run.run_id, started_at=run.created_at_utc,
+            completed_at=utc_now(), wall_clock_duration_seconds=seconds,
+            requested_mode=SETTINGS.gap_engine_mode,
+            actual_mode=str(result.diagnostics.get("active_mode", "lightweight")),
+            raw_input_count=raw_count, output_count=output_count,
+            accepted_count=output_count,
+            model_backend=str(result.diagnostics.get("embedding_model", "none")),
+            model_version=str(result.diagnostics.get("embedding_version", "")),
+        ))
+    run.evidence_event_count = len(result.consolidation.evidence_events)
+    run.raw_gap_instance_count = len(result.consolidation.raw_instances)
+    run.canonical_gap_family_count = len(result.consolidation.families)
+    run.promoted_gap_count = len(result.consolidation.promoted)
+    run.exploratory_gap_count = len(result.consolidation.exploratory)
+    evidence_papers = {
+        event.paper_id for event in result.consolidation.evidence_events
+        if event.paper_id != "corpus"
+    }
+    run.evidence_bearing_paper_count = len(evidence_papers)
+    run.papers_used_for_gap_generation = len(result.papers)
+    run.papers_used_for_known_solution_search = len(result.papers)
+
+
+def upsert_stage(run: ResearchRun | None, stage: StageRun) -> None:
+    """Replace the latest record for a deterministic UI stage."""
+    if not run:
+        return
+    run.stages = [
+        item for item in run.stages if item.stage_name != stage.stage_name
+    ]
+    run.stages.append(stage)
 
 
 def invalidate_downstream_for_purpose() -> None:
@@ -259,6 +333,33 @@ def invalidate_downstream_for_gap() -> None:
         st.session_state[key] = []
     st.session_state.external_search_diagnostics = None
     st.session_state.current_external_run = None
+
+
+def snapshot_selected_gap(gap: object, run: ResearchRun) -> dict[str, object]:
+    """Freeze the readable gap evidence used by downstream candidates."""
+    return asdict(SelectedGapSnapshot(
+        gap_id=gap.gap_id,
+        title=gap.title,
+        plain_language_statement=(
+            f"{gap.failure_type} affects {gap.affected_component}; "
+            f"the unresolved need is {gap.required_response}."
+        ),
+        gap_type=gap.structural_gap_subtype or gap.gap_type,
+        affected_task=gap.task,
+        affected_algorithm_family=gap.affected_algorithm_family,
+        binding_granularity=(
+            "exact algorithm" if gap.affected_algorithm != "Unspecified"
+            else "algorithm family"
+        ),
+        failure_condition=gap.failure_type,
+        affected_metric=gap.primary_metric,
+        evidence_papers=tuple(gap.evidence_paper_ids),
+        known_solutions=tuple(gap.known_mitigations),
+        unresolved_remainder=gap.unresolved_remainder,
+        confidence=gap.confidence_score,
+        selected_timestamp=utc_now(),
+        parent_run_id=run.run_id,
+    ))
 
 
 def render_research_run(run: ResearchRun | None, heading: str) -> None:
@@ -301,12 +402,26 @@ def render_research_run(run: ResearchRun | None, heading: str) -> None:
         ),
         "Retrieved": run.raw_paper_count,
         "After deduplication": run.deduplicated_paper_count,
+        "Candidate papers": run.candidate_paper_count,
+        "Automatically relevant": run.automatically_relevant_paper_count,
+        "Human reviewed": run.human_reviewed_paper_count,
+        "Human-confirmed relevant": run.human_confirmed_relevant_paper_count,
+        "Evidence-bearing": run.evidence_bearing_paper_count,
+        "Broad / focused / external / total queries": (
+            f"{run.broad_query_count} / {run.focused_query_count} / "
+            f"{run.external_query_count} / {run.total_query_count}"
+        ),
+        "Unique sources / source-stage results": (
+            f"{run.unique_source_count} / {run.source_stage_result_count}"
+        ),
+        "Overall wall-clock seconds": run.overall_wall_clock_duration_seconds,
+        "Sum source-request seconds": run.sum_source_request_duration_seconds,
         "Retrieved at UTC": run.created_at_utc,
         "Fixture paths": run.fixture_paths,
         "Fixture version": run.fixture_version or "not applicable",
     })
     st.dataframe([{
-        "source": item.source, "origin": item.source_type,
+        "source": item.source, "origin": item.actual_origin or item.source_type,
         "attempted": bool(item.request_count or item.cache_hits),
         "succeeded": item.success_count > 0 or item.cache_hits > 0,
         "request count": item.request_count,
@@ -321,6 +436,24 @@ def render_research_run(run: ResearchRun | None, heading: str) -> None:
     if run.source_failures:
         st.error("Source failures")
         st.json(run.source_failures)
+    if run.quality_warnings:
+        st.error("Automated quality warnings")
+        st.dataframe([
+            asdict(warning) for warning in run.quality_warnings
+        ], use_container_width=True, hide_index=True)
+    if run.stages:
+        with st.expander("Stage-scoped provenance"):
+            st.dataframe([{
+                "stage": stage.stage_name,
+                "duration": stage.wall_clock_duration_seconds,
+                "queries": stage.query_count,
+                "input": stage.raw_input_count,
+                "output": stage.output_count,
+                "accepted": stage.accepted_count,
+                "rejected": stage.rejected_count,
+                "mode": stage.actual_mode,
+                "backend": stage.model_backend,
+            } for stage in run.stages], use_container_width=True, hide_index=True)
     with st.expander("Query strings", expanded=True):
         for query in [*run.ml_queries, *run.focused_algorithm_queries]:
             st.code(query)
@@ -791,6 +924,7 @@ def goal_page() -> None:
             force_fresh=force_fresh, fixture_loader=lambda: load_fixture(
                 "ml_papers.json"
             ), fixture_path="data/offline_fixtures/ml_papers.json",
+            stage_name="broad_ml_retrieval",
         )
         if (
             force_fresh and run.actual_search_mode == "FAILED"
@@ -815,11 +949,16 @@ def goal_page() -> None:
                 sources=sources, maximum_per_query=int(maximum_per_query),
                 maximum_total=int(maximum_total), allow_cache=allow_cache,
                 allow_offline_fallback=False, force_fresh=force_fresh,
+                stage_name="focused_ml_retrieval",
             )
             papers = deduplicate_papers([*papers, *focused_papers])[:int(maximum_total)]
             run.source_results.extend(focused_run.source_results)
+            run.stages.extend(focused_run.stages)
             run.source_failures.update(focused_run.source_failures)
             run.raw_paper_count += focused_run.raw_paper_count
+            run.focused_query_count = len(focused_queries)
+            run.total_query_count = run.broad_query_count + run.focused_query_count
+            run.query_count = run.total_query_count
             run.finalize_from_papers(papers)
         binding = (
             bindings[0] if bindings and bindings[0].confidence >=
@@ -828,13 +967,17 @@ def goal_page() -> None:
         discovery = discover_structural_gaps(
             papers, purpose,
             restriction.name if restriction else (
-                binding.algorithm if binding else "Unspecified"
+                binding.algorithm if (
+                    binding and binding.binding_granularity == "exact algorithm"
+                ) else "Unspecified"
             ),
         )
         for gap in discovery.gaps:
             gap.research_run_id = run.run_id
         apply_discovery_result(discovery)
         run.structural_gap_count = len(discovery.gaps)
+        record_discovery_stages(run, discovery)
+        generate_quality_warnings(run)
         st.session_state.current_research_run = run
         st.session_state.algorithm_bindings = bindings
         st.session_state.problem_query_audit = broad_audit
@@ -876,9 +1019,22 @@ def gap_radar_page() -> None:
         f"Gap engine mode: {st.session_state.engine_diagnostics['active_mode'].upper()} · "
         f"requested: {st.session_state.engine_diagnostics['requested_mode'].upper()}"
     )
-    gaps = st.session_state.gaps
+    gaps = st.session_state.promoted_gaps
     if not gaps:
-        st.info("Create a purpose contract and discover gaps first.")
+        st.info(
+            "No gap family passed promotion gates. Review exploratory families "
+            "and raw instances in the audit sections."
+        )
+        with st.expander("Exploratory gap families", expanded=True):
+            st.dataframe([
+                {
+                    "family": family.representative_title,
+                    "status": family.promotion_status,
+                    "supporting papers": family.empirical_support_count,
+                    "reasons": "; ".join(family.rejection_reasons),
+                }
+                for family in st.session_state.exploratory_gap_families
+            ], use_container_width=True)
         return
     if run and run.actual_search_mode != "OFFLINE_FIXTURE" and len(
         st.session_state.ml_papers
@@ -895,6 +1051,13 @@ def gap_radar_page() -> None:
             asdict(item) for item in st.session_state.algorithm_bindings
         ], use_container_width=True)
     st.json(corpus_summary(st.session_state.ml_papers, gaps))
+    st.write({
+        "Evidence events": len(st.session_state.evidence_events),
+        "Raw gap instances": len(st.session_state.gaps),
+        "Canonical gap families": len(st.session_state.canonical_gap_families),
+        "Promoted research gaps": len(st.session_state.promoted_gap_families),
+        "Exploratory families": len(st.session_state.exploratory_gap_families),
+    })
     diagnostics = st.session_state.engine_diagnostics
     st.write({
         "retrieval method": diagnostics.get("retrieval_method", "SPARSE ONLY"),
@@ -939,6 +1102,7 @@ def gap_radar_page() -> None:
         st.session_state.selected_gap_id = labels[chosen].gap_id
         if run:
             run.selected_gap_id = labels[chosen].gap_id
+            run.selected_gap_snapshot = snapshot_selected_gap(labels[chosen], run)
         st.success("Gap selected. Continue to evidence or external mechanism search.")
     st.dataframe([{
         "gap": g.title, "type": g.structural_gap_subtype or g.gap_type,
@@ -1010,6 +1174,27 @@ def gap_radar_page() -> None:
         } for cluster in st.session_state.research_clusters], use_container_width=True)
     with st.expander("Research Tools · Sentence annotation"):
         annotation_tool()
+    with st.expander("Exploratory gap families"):
+        st.dataframe([
+            {
+                "family": family.representative_title,
+                "status": family.promotion_status,
+                "support": family.empirical_support_count,
+                "known mitigations": ", ".join(family.known_mitigations),
+                "unresolved": family.unresolved_remainder,
+                "rejection reasons": "; ".join(family.rejection_reasons),
+            }
+            for family in st.session_state.exploratory_gap_families
+        ], use_container_width=True)
+    with st.expander("Raw gap instances · technical audit"):
+        st.dataframe([
+            {
+                "gap_id": gap.gap_id, "title": gap.title,
+                "type": gap.structural_gap_subtype or gap.gap_type,
+                "papers": len(set(gap.evidence_paper_ids)),
+                "confidence": gap.confidence_score,
+            } for gap in st.session_state.gaps
+        ], use_container_width=True)
 
 
 def evidence_page() -> None:
@@ -1059,6 +1244,19 @@ def mechanism_page() -> None:
     st.session_state.cross_domain_signature = signature
     st.session_state.domain_selections = selections
     st.session_state.external_queries = queries
+    current_run = st.session_state.current_research_run
+    if current_run:
+        upsert_stage(current_run, StageRun(
+            stage_id=f"{current_run.run_id}:external_domain_selection",
+            stage_name="external_domain_selection",
+            parent_run_id=current_run.run_id,
+            started_at=utc_now(), completed_at=utc_now(),
+            raw_input_count=len(selections),
+            output_count=len(selected_domains),
+            accepted_count=len(selected_domains),
+            rejected_count=len(selections) - len(selected_domains),
+            model_backend="controlled_domain_profiles",
+        ))
     st.subheader("Normalized cross-domain problem signature")
     st.json(asdict(signature))
     st.subheader("Ranked external domains")
@@ -1105,6 +1303,7 @@ def mechanism_page() -> None:
             allow_offline_fallback=False, force_fresh=force_fresh,
             fixture_loader=lambda: load_fixture("external_papers.json"),
             fixture_path="data/offline_fixtures/external_papers.json",
+            stage_name="external_retrieval",
         )
         external_run.external_queries_by_domain = queries
         current_run = st.session_state.current_research_run
@@ -1112,10 +1311,31 @@ def mechanism_page() -> None:
             external_run.parent_run_id = current_run.run_id
             external_run.run_id = current_run.run_id
             current_run.external_queries_by_domain = queries
+            current_run.external_query_count = len(external_query_list)
+            current_run.total_query_count = (
+                current_run.broad_query_count
+                + current_run.focused_query_count
+                + current_run.external_query_count
+            )
+            current_run.query_count = current_run.total_query_count
+            for stage in external_run.stages:
+                stage.parent_run_id = current_run.run_id
+                stage.stage_id = (
+                    f"{current_run.run_id}:{stage.stage_name}:external"
+                )
+            current_run.stages.extend(external_run.stages)
+            current_run.source_stage_result_count += len(
+                external_run.source_results
+            )
             current_run.stage_records["external_retrieval"] = {
                 "actual_search_mode": external_run.actual_search_mode,
                 "paper_count": len(papers),
                 "sources": external_run.sources_attempted,
+                "source_results": [
+                    asdict(item) for item in external_run.source_results
+                ],
+                "paper_ids": [paper.paper_id for paper in papers],
+                "queries_by_domain": queries,
             }
         for paper in papers:
             indices = [
@@ -1131,6 +1351,24 @@ def mechanism_page() -> None:
         for mechanism in mechanisms:
             mechanism.research_run_id = external_run.run_id
         external_run.mechanism_count = len(mechanisms)
+        target_run = current_run or external_run
+        upsert_stage(target_run, StageRun(
+            stage_id=f"{target_run.run_id}:mechanism_extraction",
+            stage_name="mechanism_extraction",
+            parent_run_id=target_run.run_id,
+            started_at=utc_now(), completed_at=utc_now(),
+            raw_input_count=len(papers), output_count=len(mechanisms),
+            accepted_count=len(mechanisms), rejected_count=len(rejected),
+            model_backend="typed_deterministic_extractor",
+        ))
+        mechanism_ids = {
+            paper_id for mechanism in mechanisms
+            for paper_id in mechanism.evidence_paper_ids
+        }
+        for result in external_run.source_results:
+            result.mechanism_bearing_paper_count = len(
+                set(result.paper_ids) & mechanism_ids
+            )
         if mechanism_fallback:
             external_run.warnings.append(
                 "No mechanism was extracted; curated mechanism seeds were used."
@@ -1141,6 +1379,8 @@ def mechanism_page() -> None:
         st.session_state.mechanisms = cross_domain_only(mechanisms)
         st.session_state.rejected_mechanisms = rejected
         st.session_state.fetch_failures.update(external_run.source_failures)
+        if current_run:
+            generate_quality_warnings(current_run)
     render_research_run(
         st.session_state.current_external_run,
         "Latest external paper search",
@@ -1161,11 +1401,36 @@ def alignment_page() -> None:
     if not gap or not mechanisms:
         st.info("Select a gap and extract mechanisms first.")
         return
+    started = datetime.now(timezone.utc)
     results = [align(gap, mechanism, st.session_state.purpose) for mechanism in mechanisms]
     current_run = st.session_state.current_research_run
     for result in results:
         result.research_run_id = current_run.run_id if current_run else ""
     st.session_state.alignments = results
+    if current_run:
+        strong = sum(not item.rejected and item.score >= .7 for item in results)
+        plausible = sum(not item.rejected and item.score < .7 for item in results)
+        current_run.alignment_funnel = {
+            "raw_pairs": len(results), "compatible": strong + plausible,
+            "plausible": plausible, "strong": strong,
+            "rejected": sum(item.rejected for item in results),
+            "candidates": current_run.candidate_count,
+        }
+        upsert_stage(current_run, StageRun(
+            stage_id=f"{current_run.run_id}:structural_alignment",
+            stage_name="structural_alignment",
+            parent_run_id=current_run.run_id,
+            started_at=started.isoformat(timespec="seconds"),
+            completed_at=utc_now(),
+            wall_clock_duration_seconds=(
+                datetime.now(timezone.utc) - started
+            ).total_seconds(),
+            raw_input_count=len(mechanisms),
+            output_count=len(results),
+            accepted_count=strong + plausible,
+            rejected_count=sum(item.rejected for item in results),
+            model_backend="deterministic_structural_matcher",
+        ))
     st.dataframe([{
         "mechanism": result.mechanism_id, "score": round(result.score, 2),
         "slot": ", ".join(result.matched_slots), "rejected": result.rejected,
@@ -1200,12 +1465,66 @@ def generate_candidates() -> dict[str, object]:
         memory.close()
     portfolio = quality_diversity_portfolio(result.candidates, 12)
     current_run = st.session_state.current_research_run
+    accepted_alignments = [
+        item for item in st.session_state.alignments if not item.rejected
+    ]
+    best_alignment = max(
+        accepted_alignments, key=lambda item: item.score, default=None
+    )
     for candidate in portfolio:
         candidate.research_run_id = current_run.run_id if current_run else ""
+        candidate.alignment_id = (
+            f"{best_alignment.gap_id}:{best_alignment.mechanism_id}"
+            if best_alignment else ""
+        )
+        candidate.alignment_acceptance = (
+            "STRONG" if best_alignment and best_alignment.score >= .7
+            else "PLAUSIBLE_ACCEPTED" if best_alignment else ""
+        )
+        candidate.selected_gap_snapshot = dict(
+            current_run.selected_gap_snapshot if current_run else {}
+        )
     families = create_direction_families(portfolio)
     for family in families:
         family.research_run_id = current_run.run_id if current_run else ""
     diagnostics = summarize_rejections(portfolio, result.rejected_paths)
+    if current_run:
+        current_run.candidate_count = len(portfolio)
+        current_run.alignment_funnel = {
+            "raw_pairs": len(st.session_state.alignments),
+            "compatible": len(accepted_alignments),
+            "plausible": sum(
+                not item.rejected and item.score < .7
+                for item in st.session_state.alignments
+            ),
+            "strong": sum(
+                not item.rejected and item.score >= .7
+                for item in st.session_state.alignments
+            ),
+            "rejected": sum(item.rejected for item in st.session_state.alignments),
+            "candidates": len(portfolio),
+        }
+        upsert_stage(current_run, StageRun(
+            stage_id=f"{current_run.run_id}:candidate_synthesis",
+            stage_name="candidate_synthesis",
+            parent_run_id=current_run.run_id,
+            started_at=utc_now(), completed_at=utc_now(),
+            raw_input_count=diagnostics.get("sampled_paths", 0),
+            output_count=len(result.candidates),
+            accepted_count=len(result.candidates),
+            rejected_count=len(result.rejected_paths),
+            model_backend="typed_stochastic_search",
+        ))
+        upsert_stage(current_run, StageRun(
+            stage_id=f"{current_run.run_id}:portfolio_selection",
+            stage_name="portfolio_selection",
+            parent_run_id=current_run.run_id,
+            started_at=utc_now(), completed_at=utc_now(),
+            raw_input_count=len(result.candidates),
+            output_count=len(portfolio), accepted_count=len(portfolio),
+            rejected_count=max(0, len(result.candidates) - len(portfolio)),
+            model_backend="quality_diversity_portfolio",
+        ))
     st.session_state.candidate_portfolio = portfolio
     st.session_state.direction_families = families
     st.session_state.candidate_run_diagnostics = diagnostics
@@ -1245,18 +1564,28 @@ def prepare_missing_candidate_stages(
         )
         apply_discovery_result(discover_structural_gaps(papers, purpose))
     if not st.session_state.selected_gap:
-        if not st.session_state.gaps:
-            raise ValueError("Gap preparation produced no evidence-backed gaps.")
+        selectable_gaps = st.session_state.promoted_gaps
+        if not selectable_gaps:
+            raise ValueError(
+                "Gap preparation produced no promoted evidence-backed gap family."
+            )
         allowed = set(purpose.allowed_algorithm_families)
         st.session_state.selected_gap = max(
-            st.session_state.gaps,
+            selectable_gaps,
             key=lambda gap: (
+                gap.affected_component != "model_selection",
                 gap.failure_type.casefold() == purpose.current_failure.casefold(),
                 not allowed or gap.affected_algorithm_family in allowed,
                 gap.confidence_score,
                 gap.evidence_count,
             ),
         )
+        run = st.session_state.current_research_run
+        if run:
+            run.selected_gap_id = st.session_state.selected_gap.gap_id
+            run.selected_gap_snapshot = snapshot_selected_gap(
+                st.session_state.selected_gap, run
+            )
 
     report(40, "2/5 Retrieving mechanisms")
     if not st.session_state.mechanisms:
@@ -1454,6 +1783,37 @@ def candidates_page() -> None:
                 "rejections": {}, "rejected_paths": [],
             }
     render_candidate_diagnostics()
+    if st.session_state.candidate_portfolio:
+        candidate = st.session_state.candidate_portfolio[0]
+        mechanism = next((
+            item for item in st.session_state.mechanisms
+            if item.mechanism_id in candidate.borrowed_mechanisms
+        ), st.session_state.mechanisms[0] if st.session_state.mechanisms else None)
+        alignment = next((
+            item for item in st.session_state.alignments
+            if candidate.alignment_id == f"{item.gap_id}:{item.mechanism_id}"
+        ), None)
+        result = research_result(
+            st.session_state.current_research_run,
+            st.session_state.selected_gap, mechanism, alignment, candidate,
+        )
+        st.header("Research Result / 研究结果")
+        st.success(result["conclusion"])
+        st.subheader("Derivation at a glance")
+        st.write(result["derivation_funnel"])
+        st.subheader("BEFORE → CHANGE → EXPECTED")
+        st.write({
+            "BEFORE": result["before"], "CHANGE": result["change"],
+            "EXPECTED": result["expected"],
+        })
+        st.subheader("Evidence and uncertainty")
+        st.write({
+            "SUPPORTED": result["supported"],
+            "SYSTEM-INFERRED": result["system_inferred"],
+            "UNKNOWN": result["unknown"],
+        })
+        with st.expander("Technical details · raw result"):
+            st.json(result)
     for candidate in st.session_state.candidate_portfolio:
         with st.expander(f"{candidate.candidate_name} · {candidate.confidence}", expanded=True):
             st.write({
