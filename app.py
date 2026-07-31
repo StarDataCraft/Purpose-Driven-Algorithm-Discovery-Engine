@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,7 +18,11 @@ from gap_mining import corpus_summary, mine_gaps
 from io_utils import experiment_to_markdown, records_to_csv, to_json
 from mechanism_mining import cross_domain_only, extract_mechanisms
 from models import Paper, PurposeContract
-from paper_fetchers import fetch_papers_cached
+from paper_fetchers import (
+    FetchDiagnostics,
+    deduplicate_papers,
+    fetch_papers_cached_detailed,
+)
 from portfolio import quality_diversity_portfolio
 from query_generation import generate_external_queries, generate_ml_queries
 from research_memory import ResearchMemory
@@ -39,12 +43,114 @@ def load_fixture(name: str) -> list[Paper]:
     return [Paper(**item) for item in json.loads((FIXTURE_DIR / name).read_text())]
 
 
+def offline_diagnostics(
+    fixture_name: str,
+    papers: list[Paper],
+    queries: list[str],
+    publication_window: tuple[int, int],
+) -> FetchDiagnostics:
+    """Describe an explicit fixture run with the same schema as live retrieval."""
+    return FetchDiagnostics(
+        search_mode="OFFLINE FIXTURE",
+        sources_queried=[fixture_name],
+        query_strings=queries,
+        retrieval_timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        returned_by_source={fixture_name: len(papers)},
+        number_before_deduplication=len(papers),
+        number_after_deduplication=len(papers),
+        publication_date_range=publication_window,
+        source_failures={},
+    )
+
+
+def combine_diagnostics(
+    runs: list[FetchDiagnostics],
+    papers_after_deduplication: int,
+    fallback_occurred: bool = False,
+    fallback_reason: str = "",
+) -> FetchDiagnostics:
+    """Aggregate the domain-specific calls made by one external-search action."""
+    modes = {run.search_mode for run in runs}
+    mode = "LIVE" if "LIVE" in modes else "CACHE"
+    counts: dict[str, int] = {}
+    failures: dict[str, str] = {}
+    for run in runs:
+        for source, count in run.returned_by_source.items():
+            counts[source] = counts.get(source, 0) + count
+        failures.update(run.source_failures)
+    return FetchDiagnostics(
+        search_mode=mode,
+        sources_queried=sorted({source for run in runs for source in run.sources_queried}),
+        query_strings=[query for run in runs for query in run.query_strings],
+        retrieval_timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        returned_by_source=counts,
+        number_before_deduplication=sum(
+            run.number_before_deduplication for run in runs
+        ),
+        number_after_deduplication=papers_after_deduplication,
+        publication_date_range=runs[0].publication_date_range,
+        source_failures=failures,
+        fallback_occurred=fallback_occurred,
+        fallback_reason=fallback_reason,
+        cache_created_at=", ".join(
+            run.cache_created_at for run in runs if run.cache_created_at
+        ),
+    )
+
+
+def render_search_diagnostics(
+    diagnostics: FetchDiagnostics | None, heading: str = "Search provenance"
+) -> None:
+    """Render enough provenance to distinguish live, cached, and fixture runs."""
+    if diagnostics is None:
+        return
+    st.subheader(heading)
+    mode_col, dedup_col, range_col = st.columns(3)
+    mode_col.metric("Search mode", diagnostics.search_mode)
+    dedup_col.metric(
+        "Papers",
+        diagnostics.number_after_deduplication,
+        f"{diagnostics.number_before_deduplication} before deduplication",
+    )
+    range_col.metric(
+        "Publication range",
+        f"{diagnostics.publication_date_range[0]}–{diagnostics.publication_date_range[1]}",
+    )
+    st.caption(f"Retrieval timestamp (UTC): {diagnostics.retrieval_timestamp}")
+    if diagnostics.cache_created_at:
+        st.caption(
+            f"Cache created (UTC): {diagnostics.cache_created_at} · "
+            f"TTL: {diagnostics.cache_lifetime_seconds} seconds"
+        )
+    st.write("Sources queried:", ", ".join(diagnostics.sources_queried))
+    st.dataframe(
+        [
+            {"source": source, "returned": count}
+            for source, count in diagnostics.returned_by_source.items()
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+    with st.expander("Query strings", expanded=True):
+        for query in diagnostics.query_strings:
+            st.code(query)
+    st.write("Fallback occurred:", "Yes" if diagnostics.fallback_occurred else "No")
+    if diagnostics.fallback_reason:
+        st.warning(diagnostics.fallback_reason)
+    if diagnostics.source_failures:
+        st.error("One or more sources failed; partial results remain available.")
+        st.json(diagnostics.source_failures)
+    else:
+        st.success("Source failures: none")
+
+
 def initialize_state() -> None:
     defaults = {
         "purpose": None, "ml_papers": [], "gaps": [], "selected_gap": None,
         "external_papers": [], "mechanisms": [], "rejected_mechanisms": [],
         "alignments": [], "candidates": [], "families": [], "fetch_failures": {},
-        "external_queries": {}, "seed": 42,
+        "external_queries": {}, "seed": 42, "ml_search_diagnostics": None,
+        "external_search_diagnostics": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -129,6 +235,12 @@ def goal_page() -> None:
             value=True,
             key="_purpose_offline",
         )
+        force_fresh = st.checkbox(
+            "Force fresh search (bypass local cache)",
+            value=False,
+            key="_purpose_force_fresh",
+            help="Applies only to live mode. API rate limits and retry delays remain active.",
+        )
         submitted = st.form_submit_button(
             "Discover ML/DL gaps", type="primary"
         )
@@ -147,17 +259,29 @@ def goal_page() -> None:
             preferred_candidate_scale=scale, publication_window=years,
         )
         st.session_state.purpose = purpose
+        queries = generate_ml_queries(purpose, record.name)
         if offline:
             papers, failures = load_fixture("ml_papers.json"), {}
-        else:
-            queries = generate_ml_queries(purpose, record.name)
-            papers, failures = fetch_papers_cached(
-                " OR ".join(queries[:3]), ["openalex", "arxiv"], 30, *years
+            diagnostics = offline_diagnostics(
+                "data/offline_fixtures/ml_papers.json", papers, queries, years
             )
+        else:
+            papers, diagnostics = fetch_papers_cached_detailed(
+                " OR ".join(queries[:3]),
+                ["openalex", "arxiv"],
+                30,
+                *years,
+                force_fresh=force_fresh,
+            )
+            failures = diagnostics.source_failures
         st.session_state.ml_papers = papers
+        st.session_state.ml_search_diagnostics = diagnostics
         st.session_state.fetch_failures = failures
         st.session_state.gaps = mine_gaps(papers, purpose)
         st.success(f"Mined {len(st.session_state.gaps)} gap records from {len(papers)} papers.")
+    render_search_diagnostics(
+        st.session_state.ml_search_diagnostics, "Latest ML/DL paper search"
+    )
 
 
 def gap_radar_page() -> None:
@@ -166,6 +290,9 @@ def gap_radar_page() -> None:
     if not gaps:
         st.info("Create a purpose contract and discover gaps first.")
         return
+    render_search_diagnostics(
+        st.session_state.ml_search_diagnostics, "ML/DL paper search provenance"
+    )
     st.json(corpus_summary(st.session_state.ml_papers, gaps))
     labels = {
         f"{g.title} · {g.gap_type} · confidence {g.confidence_score:.2f} · evidence {g.evidence_count}": g
@@ -215,28 +342,70 @@ def mechanism_page() -> None:
     offline = st.checkbox(
         "Use bundled external evidence", value=True, key="_mechanism_offline"
     )
+    force_fresh = st.checkbox(
+        "Force fresh search (bypass local cache)",
+        value=False,
+        key="_mechanism_force_fresh",
+        help="Applies only to live mode. API rate limits and retry delays remain active.",
+    )
     if st.button(
         "Fetch and extract mechanisms", type="primary", key="_mechanism_fetch"
     ):
         papers = load_fixture("external_papers.json") if offline else []
         failures = {}
+        diagnostic_runs: list[FetchDiagnostics] = []
         if not offline:
             for domain, domain_queries in queries.items():
-                fetched, failed = fetch_papers_cached(
-                    domain_queries[0], ["openalex", "arxiv"], 6,
-                    *st.session_state.purpose.publication_window
+                fetched, run_diagnostics = fetch_papers_cached_detailed(
+                    domain_queries[0],
+                    ["openalex", "arxiv"],
+                    6,
+                    *st.session_state.purpose.publication_window,
+                    force_fresh=force_fresh,
                 )
                 for paper in fetched:
                     paper.domain = domain
                 papers.extend(fetched)
-                failures.update({f"{domain}:{key}": value for key, value in failed.items()})
+                run_diagnostics.source_failures = {
+                    f"{domain}:{key}": value
+                    for key, value in run_diagnostics.source_failures.items()
+                }
+                diagnostic_runs.append(run_diagnostics)
+                failures.update(run_diagnostics.source_failures)
+            papers = deduplicate_papers(papers)
         mechanisms, rejected = extract_mechanisms(papers)
+        mechanism_fallback = not mechanisms
         if not mechanisms:
             mechanisms = load_mechanism_seeds()
+        if offline:
+            diagnostics = offline_diagnostics(
+                "data/offline_fixtures/external_papers.json",
+                papers,
+                [query for domain_queries in queries.values() for query in domain_queries],
+                st.session_state.purpose.publication_window,
+            )
+            diagnostics.fallback_occurred = mechanism_fallback
+            diagnostics.fallback_reason = (
+                "No mechanism was extracted; curated mechanism seeds were used."
+                if mechanism_fallback else ""
+            )
+        else:
+            diagnostics = combine_diagnostics(
+                diagnostic_runs,
+                len(papers),
+                mechanism_fallback,
+                "No mechanism was extracted; curated mechanism seeds were used."
+                if mechanism_fallback else "",
+            )
         st.session_state.external_papers = papers
+        st.session_state.external_search_diagnostics = diagnostics
         st.session_state.mechanisms = cross_domain_only(mechanisms)
         st.session_state.rejected_mechanisms = rejected
         st.session_state.fetch_failures.update(failures)
+    render_search_diagnostics(
+        st.session_state.external_search_diagnostics,
+        "Latest external paper search",
+    )
     st.dataframe([{
         "mechanism": m.name, "domain": m.source_domain,
         "signal": m.observed_signal, "response": m.response_rule,
