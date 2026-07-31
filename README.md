@@ -1,0 +1,188 @@
+# Purpose-Driven Cross-Disciplinary Algorithm Discovery Engine
+
+目的驱动的跨学科算法发现引擎
+
+This project proposes testable machine-learning research directions by starting with a
+verified problem and an explicit purpose—not an arbitrary algorithm × discipline pairing.
+It uses deterministic NLP, typed signatures, constrained graph search, and transparent
+scoring. It does **not** use an LLM, generative API, remote embedding service, or hidden AI
+summarizer.
+
+## What it does
+
+The workflow is:
+
+```text
+purpose or ML/DL gap
+→ recent ML/DL paper search
+→ evidence-backed gap signature
+→ purpose contract
+→ gap-driven external paper search
+→ mechanism signature
+→ structural alignment
+→ algorithm slot + operator
+→ stochastic candidate search
+→ quality-diversity portfolio
+→ novelty and falsification audit
+→ minimal experiment
+→ research memory
+```
+
+OpenAlex and arXiv are queried through their public APIs. Each adapter has bounded results,
+timeouts, retry/backoff, rate limiting, source isolation, and deduplication. The included
+offline corpus makes the complete pipeline testable when the network is unavailable.
+
+## Purpose-first philosophy
+
+A candidate cannot enter search without a `PurposeContract`, selected evidence-backed
+`GapSignature`, evaluation metric, affected algorithm/family, and defined inference-time
+information. The engine rejects ML-domain mechanisms from its cross-disciplinary view,
+checks that weaknesses belong to the selected algorithm, and runs information-leakage and
+slot-compatibility rules before scoring.
+
+## Architecture
+
+- `models.py`: typed records for papers, purpose, gaps, mechanisms, operators, candidates,
+  families, scoring, and experiments.
+- `paper_fetchers.py`: OpenAlex/arXiv adapters, partial failure handling, cache, provenance,
+  and DOI/arXiv/title/fingerprint deduplication.
+- `query_generation.py`: gap-oriented ML queries and structure-driven external queries.
+- `text_processing.py`, `gap_mining.py`: section-aware explicit extraction, corpus
+  aggregation, assumption/failure signatures, and evidence confidence.
+- `mechanism_mining.py`, `signatures.py`: process-cue validation, generic-word rejection,
+  evidence preservation, and external-domain filtering.
+- `algorithm_library.py`, `operator_library.py`: curated algorithm skeletons, owned
+  weaknesses, modifiable slots, and compositional formula/update schemas.
+- `alignment.py`: typed field correspondences, TF-IDF within allowed field pairs, explicit
+  compatibility matrix, contradiction and missing-information penalties.
+- `graph_engine.py`, `search_engine.py`: bounded typed graph and seeded stochastic
+  small/medium/large search with rejected-path traces.
+- `portfolio.py`, `direction_families.py`: grid-style quality-diversity archive and
+  structurally related research families.
+- `synthesis.py`: structured deltas derived only from the selected gap, mechanism, operator,
+  and algorithm slot.
+- `novelty.py`, `falsification.py`: canonical fingerprints, lexical search queries,
+  structural-neighbor warnings, leakage checks, random-signal tests, and kill criteria.
+- `experiment_planner.py`: executable stressor, baseline, ablation, metric, compute, and
+  reproducibility plans.
+- `research_memory.py`, `trend_analysis.py`: SQLite success/failure memory and bounded
+  metadata trends. Repeated failures receive increasing penalties.
+- `app.py`: thin ten-page Streamlit workflow.
+
+Curated JSON resources live in `data/`; deterministic paper fixtures live in
+`data/offline_fixtures/`.
+
+## Gap and mechanism mining
+
+Explicit gaps are detected from limitation and future-work cues. Section weighting gives
+limitations, discussion, conclusion, and future-work evidence more weight than abstracts.
+Repeated compatible gap signatures are aggregated at corpus level. Algorithm assumptions
+come from the registry created from the algorithm catalog.
+
+External queries are generated only after a gap exists and incorporate its failure,
+observable signal, required response, component, constraints, and timescale. Mechanism
+extraction requires a multi-token process with feedback/state/action cues and source
+evidence. Generic terms such as “higher”, “novel”, and “performance” are rejected.
+
+## Structural alignment and synthesis
+
+Only corresponding fields are compared: failure↔original problem, signal↔observed signal,
+response↔response rule, constraints↔resources, preservation↔target, timescale↔timescale,
+and affected component↔compatible slot. Explicit strong/medium/weak compatibility weights
+prevent keyword coincidence from dominating.
+
+Modification operators provide required inputs, produced state, formula schemas, inference
+requirements, complexity effects, known equivalents, and failure modes. Formulas are
+clearly schematic; the engine never invents unsupported mathematical claims.
+
+## Stochastic search and quality diversity
+
+Search supports:
+
+- small: one gap × one mechanism × one slot × one operator;
+- medium: complementary mechanisms with one or two operators;
+- large: coherent multi-mechanism transfer with a larger complexity penalty.
+
+Randomness chooses among compatible paths only. Every candidate records the seed, sampled
+path, mutation steps, selected nodes, and compatibility checks. A fixed corpus/settings/seed
+is reproducible. The portfolio limits repeated algorithm families, disciplines, mechanisms,
+and modification cells rather than returning near-duplicates.
+
+## Novelty, falsification, and experiments
+
+Novelty is a triage status, never a claim. The engine produces lexical queries and a
+canonical fingerprint across family, slot, state, operator, update, memory/routing logic,
+and inference information. Known ML equivalents are shown.
+
+Every candidate is challenged by shuffled-signal, fixed-mechanism, simpler-operator,
+matched-compute, and parameter-count-matched baselines. It includes a strongest rejection
+reason and explicit kill criterion. Experiment plans contain public/synthetic datasets,
+stressors, baselines, required ablations, primary/robustness/stability/calibration metrics,
+resource reporting, five seeds, success/failure rules, and an information audit.
+
+## Research memory
+
+SQLite stores typed records, rejected fingerprints, repeated failure counts, and ratings.
+Failure categories include mechanism-slot incompatibility, metaphor-only transfer,
+inference/future/label leakage, duplication, ablation failure, and resource violations.
+JSON, CSV utilities, and Markdown experiment export are included. Runtime databases, caches,
+and exports are ignored by Git.
+
+## Local setup
+
+Python 3.11 or newer is recommended.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+streamlit run app.py
+```
+
+The first page defaults to the bundled evidence corpus. Clear “Use bundled offline
+evidence” to query OpenAlex and arXiv. No secrets are required. An optional polite-pool
+OpenAlex email can be set by adapting `Settings.openalex_email`.
+
+## Tests and verification
+
+```bash
+pytest -q
+python -m compileall -q .
+python -c "import app"
+streamlit run app.py --server.headless true
+```
+
+The suite covers invalid/valid mechanism extraction, false cross-disciplinarity, weakness
+ownership, purpose preconditions, leakage, typed alignment, operator compatibility,
+fixed-seed reproducibility, offline end-to-end behavior, experiment completeness, and
+persistent failure memory.
+
+## Streamlit Community Cloud
+
+1. Push the repository to GitHub after local verification.
+2. In Streamlit Community Cloud choose **Create app**.
+3. Select this repository, branch `main`, and entry point `app.py`.
+4. Use the default Python environment; `requirements.txt` contains all dependencies.
+5. Deploy. No secret configuration is required.
+
+The app uses no absolute runtime paths, bounds paper/candidate/graph sizes, isolates API
+failures, and defaults to lightweight TF-IDF. Runtime SQLite and caches are excluded.
+
+## Known limitations and roadmap
+
+- Most public API results expose only title/abstract; their gap confidence is deliberately
+  lower than full-text limitation evidence.
+- Seed mechanisms provide a validated ontology fallback. Newly extracted mechanisms are
+  conservative and can miss unfamiliar scientific language.
+- Structural similarity is an automated screening aid, not an exhaustive novelty review.
+- Formula schemas are implementation blueprints, not proofs.
+- Large transfers need manual decomposition and substantially stronger empirical evidence.
+- Future work includes licensed full-text adapters, richer non-generative scientific
+  encoders as optional plugins, BM25 reranking, and importing executed experiment results.
+
+## Scientific disclaimer
+
+The system proposes **testable algorithm research directions**. It does not prove that a
+candidate is genuinely novel, mathematically correct, superior, or publication-ready.
+Novelty and value require a careful literature review, implementation, experiments, and
+peer evaluation.

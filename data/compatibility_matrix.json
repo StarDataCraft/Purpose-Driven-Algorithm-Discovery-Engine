@@ -1,0 +1,37 @@
+{
+  "homeostatic negative feedback": {
+    "strong": ["update_rule", "regularization", "aggregation", "feedback_control"],
+    "medium": ["memory", "stopping"],
+    "weak": ["state_representation"]
+  },
+  "immune memory reactivation": {
+    "strong": ["memory", "routing", "expert_selection", "component_birth_death"],
+    "medium": ["aggregation"],
+    "weak": ["objective"]
+  },
+  "predictive error correction": {
+    "strong": ["update_rule", "state_representation", "routing"],
+    "medium": ["objective"],
+    "weak": ["component_birth_death"]
+  },
+  "observability-based state estimation": {
+    "strong": ["state_representation", "state_estimation", "feature_acquisition"],
+    "medium": ["regularization"],
+    "weak": ["objective"]
+  },
+  "mechanism-design incentive alignment": {
+    "strong": ["objective", "aggregation", "uncertainty_estimate"],
+    "medium": ["routing"],
+    "weak": ["state_representation"]
+  },
+  "phase-transition threshold switching": {
+    "strong": ["regime_detection", "component_birth_death", "update_rule"],
+    "medium": ["stopping"],
+    "weak": ["objective"]
+  },
+  "ecological niche competition": {
+    "strong": ["assignment", "component_birth_death", "expert_selection"],
+    "medium": ["regularization", "routing"],
+    "weak": ["uncertainty_estimate"]
+  }
+}

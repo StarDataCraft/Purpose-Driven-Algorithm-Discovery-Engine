@@ -1,0 +1,15 @@
+{
+  "invalid_mechanisms": [
+    "higher", "lower", "significant", "proposed", "novel", "effective",
+    "efficient", "robust", "large", "small", "recent", "based", "various",
+    "multiple", "research", "method", "result", "approach", "performance",
+    "framework", "important", "improved", "better", "state-of-the-art",
+    "advanced", "general", "different", "analysis", "application"
+  ],
+  "mechanism_cues": [
+    "feedback", "memory", "reactivation", "competition", "allocation",
+    "selection", "switching", "estimation", "correction", "adaptation",
+    "regulation", "equilibrium", "control", "routing", "homeostasis",
+    "observability", "incentive", "specialization", "transition"
+  ]
+}
