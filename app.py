@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import time
 from collections import Counter
 from dataclasses import asdict
 from datetime import date, datetime, timezone
@@ -18,36 +17,25 @@ from annotation_schema import (
     SentenceAnnotation, annotations_csv, annotations_jsonl, load_annotations,
 )
 from alignment import align
-from assumption_analysis import (
-    detect_assumption_mismatches, extract_observed_conditions,
-    load_assumption_registry,
-)
 from config import DEFAULT_DB, FIXTURE_DIR
-from contradiction_analysis import detect_contradictory_evidence
-from coverage_analysis import (
-    coverage_matrix, detect_coverage_gaps, extract_coverage_records,
-)
+from coverage_analysis import coverage_matrix
+from discovery_pipeline import StructuralDiscoveryResult, discover_structural_gaps
 from direction_families import create_direction_families
-from gap_mining import corpus_summary, mine_gaps
+from gap_mining import corpus_summary
 from io_utils import experiment_to_markdown, records_to_csv, to_json
 from mechanism_mining import cross_domain_only, extract_mechanisms
-from known_solution_analysis import assess_known_solutions
 from models import Paper, PurposeContract
 from paper_fetchers import (
     FetchDiagnostics,
     deduplicate_papers,
     fetch_papers_cached_detailed,
 )
-from hybrid_retrieval import hybrid_rerank, scientific_query_text
-from paper_clustering import cluster_papers
 from portfolio import quality_diversity_portfolio
 from query_generation import generate_external_queries, generate_ml_queries
 from research_memory import ResearchMemory
-from scientific_embeddings import select_embedding_backend
 from search_engine import search_candidates
 from signatures import load_mechanism_seeds
 from trend_analysis import trend_indicators
-from text_processing import split_sentences
 from weak_supervision import GapLabel, label_sentence
 
 PAGES = [
@@ -210,125 +198,24 @@ def initialize_state() -> None:
         st.session_state.setdefault(key, value)
 
 
-def analyze_structural_evidence(papers: list[Paper], purpose: PurposeContract) -> None:
-    """Populate Phase 1 records used by the radar without changing downstream gaps."""
-    started = time.perf_counter()
-    records = extract_coverage_records(papers, purpose)
-    st.session_state.coverage_records = records
-    st.session_state.coverage_gaps = detect_coverage_gaps(
-        records, purpose, SETTINGS.minimum_coverage_support,
-        SETTINGS.maximum_unknown_ratio,
+def apply_discovery_result(result: StructuralDiscoveryResult) -> None:
+    """Publish one canonical pipeline result to Streamlit session state."""
+    st.session_state.ml_papers = result.papers
+    st.session_state.gaps = result.gaps
+    st.session_state.retrieval_scores = result.retrieval_scores
+    st.session_state.coverage_records = result.coverage_records
+    st.session_state.coverage_gaps = result.coverage_gaps
+    st.session_state.assumption_mismatches = result.assumption_mismatches
+    st.session_state.contradictory_gaps = result.contradictions
+    st.session_state.research_clusters = result.research_clusters
+    st.session_state.known_solution_results = result.known_solution_results
+    configuration_warnings = st.session_state.engine_diagnostics.get(
+        "configuration_warnings", []
     )
-    conditions = extract_observed_conditions(papers, purpose)
-    used = {
-        item for record in records
-        for item in (record.algorithm, record.algorithm_family)
-        if item != "UNKNOWN"
+    st.session_state.engine_diagnostics = {
+        **result.diagnostics,
+        "configuration_warnings": configuration_warnings,
     }
-    st.session_state.assumption_mismatches = detect_assumption_mismatches(
-        load_assumption_registry(), conditions, used, purpose
-    )
-    st.session_state.contradictory_gaps = detect_contradictory_evidence(
-        papers, records
-    )
-    st.session_state.known_solution_results = {
-        gap.gap_id: assess_known_solutions(gap, papers)
-        for gap in st.session_state.gaps
-        if gap.structural_gap_subtype
-    }
-    for gap in st.session_state.gaps:
-        result = st.session_state.known_solution_results.get(gap.gap_id)
-        if result:
-            gap.known_mitigations = result.mitigating_methods
-            gap.unresolved_remainder = result.unresolved_remainder
-    if not papers:
-        st.session_state.research_clusters = []
-        return
-    failures = st.session_state.engine_diagnostics["model_failures"]
-    backend = select_embedding_backend(
-        SETTINGS.gap_engine_mode, SETTINGS.enable_specter2, failures
-    )
-    try:
-        embeddings = backend.embed_documents(
-            papers[:SETTINGS.transformer_max_papers]
-        )
-        st.session_state.research_clusters = cluster_papers(
-            papers[:len(embeddings)], embeddings, records[:len(embeddings)],
-            SETTINGS.clustering_threshold,
-        )
-        info = backend.model_info()
-        active = (
-            SETTINGS.gap_engine_mode if info.backend == "specter2"
-            else "lightweight"
-        )
-        st.session_state.engine_diagnostics.update({
-            "active_mode": active,
-            "embedding_model": info.model_name,
-            "embedding_version": info.model_version,
-            "dense_reranking": info.backend == "specter2",
-            "sparse_reranking": True,
-            "papers_processed": len(embeddings),
-            "papers_truncated": len(papers) > SETTINGS.transformer_max_papers,
-            "sentences_processed": min(
-                SETTINGS.transformer_max_sentences,
-                sum(len(split_sentences(
-                    " ".join([paper.abstract, *paper.sections.values()])
-                )) for paper in papers),
-            ),
-            "paper_processing_seconds": round(time.perf_counter() - started, 4),
-            "estimated_memory_tier": (
-                "high" if info.backend == "specter2" else "low"
-            ),
-        })
-    except Exception as exc:
-        failures.append(f"clustering fallback: {type(exc).__name__}: {exc}")
-        st.session_state.research_clusters = []
-
-
-def rerank_retrieved_papers(
-    papers: list[Paper], purpose: PurposeContract, algorithm: str
-) -> list[Paper]:
-    """Apply sparse-only or hybrid local reranking and preserve components."""
-    if not papers:
-        st.session_state.retrieval_scores = []
-        st.session_state.engine_diagnostics.update({
-            "active_mode": "lightweight", "retrieval_method": "SPARSE ONLY",
-            "sparse_reranking": False, "dense_reranking": False,
-        })
-        return []
-    failures = st.session_state.engine_diagnostics["model_failures"]
-    backend = select_embedding_backend(
-        SETTINGS.gap_engine_mode, SETTINGS.enable_specter2, failures
-    )
-    dense = backend if backend.model_info().backend == "specter2" else None
-    lexical_queries = generate_ml_queries(purpose, algorithm)
-    semantic_query = scientific_query_text(
-        purpose.task, purpose.current_failure, algorithm, purpose.data_type,
-        purpose.desired_improvement, purpose.primary_metric,
-        purpose.deployment_environment,
-    )
-    try:
-        ranked, scores = hybrid_rerank(
-            papers, " ".join(lexical_queries), semantic_query, dense
-        )
-    except Exception as exc:
-        failures.append(f"hybrid retrieval fallback: {type(exc).__name__}: {exc}")
-        ranked, scores = hybrid_rerank(
-            papers, " ".join(lexical_queries), semantic_query, None
-        )
-        dense = None
-    st.session_state.retrieval_scores = scores
-    st.session_state.engine_diagnostics.update({
-        "active_mode": SETTINGS.gap_engine_mode if dense else "lightweight",
-        "retrieval_method": "HYBRID SPECTER2" if dense else (
-            "HYBRID FALLBACK" if failures else "SPARSE ONLY"
-        ),
-        "sparse_query": lexical_queries,
-        "semantic_query": semantic_query,
-        "sparse_reranking": True,
-        "dense_reranking": bool(dense),
-    })
-    return ranked
 
 
 def navigate_to(page: str) -> None:
@@ -619,13 +506,14 @@ def goal_page() -> None:
                 force_fresh=force_fresh,
             )
             failures = diagnostics.source_failures
-        papers = rerank_retrieved_papers(papers, purpose, record.name)
-        st.session_state.ml_papers = papers
+        discovery = discover_structural_gaps(papers, purpose, record.name)
+        apply_discovery_result(discovery)
         st.session_state.ml_search_diagnostics = diagnostics
         st.session_state.fetch_failures = failures
-        st.session_state.gaps = mine_gaps(papers, purpose)
-        analyze_structural_evidence(papers, purpose)
-        st.success(f"Mined {len(st.session_state.gaps)} gap records from {len(papers)} papers.")
+        st.success(
+            f"Mined {len(discovery.gaps)} gap records from "
+            f"{len(discovery.papers)} papers."
+        )
     render_search_diagnostics(
         st.session_state.ml_search_diagnostics, "Latest ML/DL paper search"
     )
@@ -942,8 +830,6 @@ def prepare_missing_candidate_stages(
     report(20, "1/5 Preparing gap")
     if not st.session_state.gaps:
         papers = load_fixture("ml_papers.json")
-        papers = rerank_retrieved_papers(papers, purpose, "purpose-selected algorithm")
-        st.session_state.ml_papers = papers
         queries = generate_ml_queries(purpose)
         st.session_state.ml_search_diagnostics = offline_diagnostics(
             "data/offline_fixtures/ml_papers.json",
@@ -951,8 +837,7 @@ def prepare_missing_candidate_stages(
             queries,
             purpose.publication_window,
         )
-        st.session_state.gaps = mine_gaps(papers, purpose)
-        analyze_structural_evidence(papers, purpose)
+        apply_discovery_result(discover_structural_gaps(papers, purpose))
     if not st.session_state.selected_gap:
         if not st.session_state.gaps:
             raise ValueError("Gap preparation produced no evidence-backed gaps.")

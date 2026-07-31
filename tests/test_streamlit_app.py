@@ -143,8 +143,22 @@ def test_gap_radar_renders_structural_views_from_fixture():
 
     assert not app.exception
     labels = [expander.label for expander in app.expander]
+    assert any("Gap engine mode: LIGHTWEIGHT" in info.value for info in app.info)
+    assert app.multiselect(key="_gap_type_filters")
     assert "Coverage Matrix" in labels
     assert "Assumption Mismatch view" in labels
     assert "Contradictory evidence view" in labels
     assert "Research Clusters" in labels
     assert app.session_state["coverage_records"]
+    assert app.session_state["assumption_mismatches"]
+    assert any(
+        gap.structural_gap_subtype == "assumption_mismatch"
+        for gap in app.session_state["gaps"]
+    )
+
+    app.button(key="_gap_radar_submit").click().run()
+    app.radio(key="_workflow_page").set_value("3 · Gap evidence").run()
+
+    assert not app.exception
+    assert app.title[0].value == "Gap evidence"
+    assert app.session_state["selected_gap"] is not None
