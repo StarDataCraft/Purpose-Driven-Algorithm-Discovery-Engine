@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -145,15 +146,114 @@ def render_search_diagnostics(
 
 
 def initialize_state() -> None:
+    """Initialize all persistent domain and run-state keys in one place."""
     defaults = {
         "purpose": None, "ml_papers": [], "gaps": [], "selected_gap": None,
         "external_papers": [], "mechanisms": [], "rejected_mechanisms": [],
-        "alignments": [], "candidates": [], "families": [], "fetch_failures": {},
+        "alignments": [], "candidate_portfolio": [], "direction_families": [],
+        "candidate_run_diagnostics": None, "fetch_failures": {},
         "external_queries": {}, "seed": 42, "ml_search_diagnostics": None,
         "external_search_diagnostics": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+
+
+def navigate_to(page: str) -> None:
+    """Update the sidebar widget through a pre-rerun button callback."""
+    st.session_state["_workflow_page"] = page
+
+
+def candidate_prerequisites() -> dict[str, tuple[bool, str]]:
+    """Return Page 7 requirements and actionable explanations."""
+    purpose = st.session_state.purpose
+    gap = st.session_state.selected_gap
+    mechanisms = st.session_state.mechanisms
+    accepted = [
+        result for result in st.session_state.alignments if not result.rejected
+    ]
+    library = load_algorithm_library()
+    compatible_algorithm = False
+    if gap:
+        compatible_algorithm = (
+            gap.affected_algorithm.casefold() in library
+            or any(
+                record.family == gap.affected_algorithm_family
+                or gap.task in record.tasks
+                for record in library.values()
+            )
+        )
+    return {
+        "Purpose contract": (
+            purpose is not None,
+            "Complete Step 1: Goal setup",
+        ),
+        "Selected gap": (
+            gap is not None,
+            "Complete Step 2: Latest ML/DL gap radar",
+        ),
+        "External mechanisms": (
+            bool(mechanisms),
+            "Complete Step 4: External mechanism search",
+        ),
+        "Accepted structural alignments": (
+            bool(accepted),
+            "Complete Step 5: Structural alignment",
+        ),
+        "Direction families ready/generated": (
+            bool(st.session_state.direction_families) or bool(accepted),
+            "Complete Step 6: Research direction families",
+        ),
+        "Compatible base algorithm": (
+            compatible_algorithm,
+            "Select a gap linked to a supported algorithm",
+        ),
+        "Primary metric": (
+            bool(purpose and purpose.primary_metric),
+            "Define a primary metric in Step 1",
+        ),
+        "Inference information": (
+            bool(purpose and purpose.available_inference_information),
+            "Define inference-time information in Step 1",
+        ),
+    }
+
+
+def summarize_rejections(
+    candidates: list[object], rejected_paths: list[dict[str, object]]
+) -> dict[str, object]:
+    """Aggregate search rejection traces into stable user-facing categories."""
+    categories = Counter()
+    mappings = {
+        "purpose": "missing purpose fit",
+        "mechanism-slot": "mechanism-slot incompatibility",
+        "cross-disciplinarity": "false cross-disciplinarity",
+        "inference": "unavailable inference information",
+        "operator-slot": "operator incompatibility",
+        "alignment": "weak structural alignment",
+        "duplicate": "duplicate-method penalty",
+        "resource": "resource-budget violation",
+        "weakness": "algorithm-weakness mismatch",
+    }
+    for path in rejected_paths:
+        for reason in path.get("reasons", []):
+            normalized = str(reason).casefold()
+            category = next(
+                (label for cue, label in mappings.items() if cue in normalized),
+                "other hard rejection reasons",
+            )
+            categories[category] += 1
+    families = {candidate.base_algorithm_family for candidate in candidates}
+    return {
+        "status": "success" if candidates else "empty",
+        "sampled_paths": len(candidates) + len(rejected_paths),
+        "surviving_candidates": len(candidates),
+        "algorithm_families": len(families),
+        "rejections": dict(categories),
+        "rejected_paths": rejected_paths,
+        "failed_stage": "",
+        "error": "",
+    }
 
 
 def sidebar() -> str:
@@ -435,19 +535,123 @@ def alignment_page() -> None:
             st.json(asdict(result))
 
 
-def generate_candidates() -> None:
+def generate_candidates() -> dict[str, object]:
+    """Generate and persist one canonical candidate portfolio plus diagnostics."""
+    checks = candidate_prerequisites()
+    blocking = [
+        name for name, (ready, _) in checks.items()
+        if not ready and name != "Direction families ready/generated"
+    ]
+    if blocking:
+        raise ValueError(
+            "Missing candidate prerequisites: " + ", ".join(blocking)
+        )
     memory = ResearchMemory(DEFAULT_DB)
-    result = search_candidates(
-        st.session_state.purpose, [st.session_state.selected_gap],
-        st.session_state.mechanisms, st.session_state.seed,
-        st.session_state.purpose.preferred_candidate_scale, 24,
-        memory.failure_penalties(),
-    )
-    memory.close()
+    try:
+        result = search_candidates(
+            st.session_state.purpose, [st.session_state.selected_gap],
+            st.session_state.mechanisms, st.session_state.seed,
+            st.session_state.purpose.preferred_candidate_scale, 24,
+            memory.failure_penalties(),
+        )
+    finally:
+        memory.close()
     portfolio = quality_diversity_portfolio(result.candidates, 12)
-    st.session_state.candidates = portfolio
-    st.session_state.rejected_paths = result.rejected_paths
-    st.session_state.families = create_direction_families(portfolio)
+    families = create_direction_families(portfolio)
+    diagnostics = summarize_rejections(portfolio, result.rejected_paths)
+    st.session_state.candidate_portfolio = portfolio
+    st.session_state.direction_families = families
+    st.session_state.candidate_run_diagnostics = diagnostics
+    return diagnostics
+
+
+def prepare_missing_candidate_stages(
+    progress_callback: object | None = None,
+) -> list[str]:
+    """Run missing pre-search stages using current state or bundled evidence."""
+    stages: list[str] = []
+
+    def report(value: int, label: str) -> None:
+        stages.append(label)
+        if callable(progress_callback):
+            progress_callback(value, label)
+
+    purpose = st.session_state.purpose
+    if purpose is None:
+        raise ValueError("Purpose contract is missing. Complete Step 1 first.")
+
+    report(20, "1/5 Preparing gap")
+    if not st.session_state.gaps:
+        papers = load_fixture("ml_papers.json")
+        st.session_state.ml_papers = papers
+        queries = generate_ml_queries(purpose)
+        st.session_state.ml_search_diagnostics = offline_diagnostics(
+            "data/offline_fixtures/ml_papers.json",
+            papers,
+            queries,
+            purpose.publication_window,
+        )
+        st.session_state.gaps = mine_gaps(papers, purpose)
+    if not st.session_state.selected_gap:
+        if not st.session_state.gaps:
+            raise ValueError("Gap preparation produced no evidence-backed gaps.")
+        allowed = set(purpose.allowed_algorithm_families)
+        st.session_state.selected_gap = max(
+            st.session_state.gaps,
+            key=lambda gap: (
+                gap.failure_type.casefold() == purpose.current_failure.casefold(),
+                not allowed or gap.affected_algorithm_family in allowed,
+                gap.confidence_score,
+                gap.evidence_count,
+            ),
+        )
+
+    report(40, "2/5 Retrieving mechanisms")
+    if not st.session_state.mechanisms:
+        papers = load_fixture("external_papers.json")
+        mechanisms, rejected = extract_mechanisms(papers)
+        mechanism_fallback = not mechanisms
+        if mechanism_fallback:
+            mechanisms = load_mechanism_seeds()
+        st.session_state.external_papers = papers
+        st.session_state.mechanisms = cross_domain_only(mechanisms)
+        st.session_state.rejected_mechanisms = rejected
+        queries = generate_external_queries(st.session_state.selected_gap)
+        diagnostics = offline_diagnostics(
+            "data/offline_fixtures/external_papers.json",
+            papers,
+            [query for values in queries.values() for query in values],
+            purpose.publication_window,
+        )
+        diagnostics.fallback_occurred = mechanism_fallback
+        diagnostics.fallback_reason = (
+            "No mechanism was extracted; curated mechanism seeds were used."
+            if mechanism_fallback else ""
+        )
+        st.session_state.external_search_diagnostics = diagnostics
+
+    report(60, "3/5 Aligning structures")
+    if not st.session_state.alignments:
+        st.session_state.alignments = [
+            align(st.session_state.selected_gap, mechanism, purpose)
+            for mechanism in st.session_state.mechanisms
+        ]
+    if not any(not result.rejected for result in st.session_state.alignments):
+        raise ValueError(
+            "No structural alignments passed hard validation. "
+            "Return to Step 4 or select another gap."
+        )
+
+    report(80, "4/5 Synthesizing candidates")
+    diagnostics = generate_candidates()
+    report(100, "5/5 Building portfolio")
+    diagnostics["stages"] = stages
+    diagnostics["retrieval_mode"] = (
+        st.session_state.external_search_diagnostics.search_mode
+        if st.session_state.external_search_diagnostics else "UNKNOWN"
+    )
+    st.session_state.candidate_run_diagnostics = diagnostics
+    return stages
 
 
 def family_page() -> None:
@@ -455,27 +659,144 @@ def family_page() -> None:
     if st.button(
         "Run stochastic structured search", type="primary", key="_family_search"
     ):
-        generate_candidates()
-    if not st.session_state.families:
+        try:
+            with st.spinner("Generating direction families and candidates…"):
+                diagnostics = generate_candidates()
+            st.success(
+                f"Generated {diagnostics['surviving_candidates']} candidates "
+                f"across {diagnostics['algorithm_families']} algorithm families."
+            )
+        except Exception as exc:
+            st.session_state.candidate_run_diagnostics = {
+                "status": "failure", "failed_stage": "direction-family generation",
+                "error": str(exc), "sampled_paths": 0, "surviving_candidates": 0,
+                "algorithm_families": 0, "rejections": {}, "rejected_paths": [],
+            }
+            st.error(f"Direction-family generation failed: {exc}")
+    if not st.session_state.direction_families:
         st.info("Run search after selecting a gap and mechanisms.")
         return
-    for family in st.session_state.families:
+    for family in st.session_state.direction_families:
         with st.expander(f"{family.name} · risk {family.risk_level}", expanded=True):
             st.json(asdict(family))
 
 
+def render_candidate_diagnostics() -> None:
+    """Explain success, empty portfolios, and failed candidate runs."""
+    diagnostics = st.session_state.candidate_run_diagnostics
+    if not diagnostics:
+        return
+    status = diagnostics.get("status")
+    if status == "success":
+        st.success(
+            f"Generated {diagnostics['surviving_candidates']} candidates across "
+            f"{diagnostics['algorithm_families']} algorithm families."
+        )
+    elif status == "empty":
+        st.warning("No candidates survived validation.")
+    elif status == "failure":
+        st.error(
+            f"Candidate generation failed during "
+            f"{diagnostics.get('failed_stage') or 'unknown stage'}: "
+            f"{diagnostics.get('error') or 'unknown error'}"
+        )
+    if diagnostics.get("retrieval_mode"):
+        st.info(f"Paper retrieval mode: {diagnostics['retrieval_mode']}")
+    if diagnostics.get("stages"):
+        st.write("Completed stages:", " → ".join(diagnostics["stages"]))
+    st.write(f"Sampled paths: {diagnostics.get('sampled_paths', 0)}")
+    if diagnostics.get("rejections"):
+        st.subheader("Rejection summary")
+        st.dataframe(
+            [
+                {"reason": reason, "count": count}
+                for reason, count in diagnostics["rejections"].items()
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    if status == "empty":
+        st.caption(
+            "Recovery options: return to mechanism search, select another gap, "
+            "increase the search scale, or use the offline fixture demo. "
+            "Hard scientific validation rules were not weakened."
+        )
+    with st.expander("Rejected path details"):
+        st.json(diagnostics.get("rejected_paths", []))
+
+
 def candidates_page() -> None:
     st.title("Candidate algorithms")
+    st.subheader("Candidate generation prerequisites")
+    checks = candidate_prerequisites()
+    for name, (ready, action) in checks.items():
+        st.markdown(f"{'✓' if ready else '✗'} **{name}**"
+                    + ("" if ready else f" — {action}"))
+    missing = [(name, action) for name, (ready, action) in checks.items() if not ready]
+    if missing:
+        next_action = missing[0][1]
+        st.warning(next_action)
+        target = (
+            PAGES[0] if "Step 1" in next_action
+            else PAGES[1] if "Step 2" in next_action
+            else PAGES[3] if "Step 4" in next_action
+            else PAGES[4] if "Step 5" in next_action
+            else PAGES[5]
+        )
+        st.button(
+            next_action,
+            key="_candidate_go_to_missing_step",
+            on_click=navigate_to,
+            args=(target,),
+        )
+
     st.session_state.setdefault("_candidate_seed", st.session_state.seed)
     seed = st.number_input(
         "Reproducible seed", step=1, key="_candidate_seed"
     )
     st.session_state.seed = int(seed)
     if st.button(
+        "Generate from current purpose",
+        type="primary",
+        key="_candidate_generate_end_to_end",
+        disabled=st.session_state.purpose is None,
+    ):
+        progress = st.progress(0, text="Preparing candidate workflow…")
+
+        def update_progress(value: int, label: str) -> None:
+            progress.progress(value, text=label)
+
+        try:
+            prepare_missing_candidate_stages(update_progress)
+        except Exception as exc:
+            st.session_state.candidate_run_diagnostics = {
+                "status": "failure",
+                "failed_stage": (
+                    st.session_state.candidate_run_diagnostics.get("failed_stage", "")
+                    if st.session_state.candidate_run_diagnostics else
+                    "end-to-end preparation"
+                ),
+                "error": str(exc), "sampled_paths": 0,
+                "surviving_candidates": 0, "algorithm_families": 0,
+                "rejections": {}, "rejected_paths": [],
+            }
+        finally:
+            progress.empty()
+    if st.button(
         "Regenerate portfolio", type="primary", key="_candidate_regenerate"
     ):
-        generate_candidates()
-    for candidate in st.session_state.candidates:
+        try:
+            with st.spinner("Generating candidate portfolio…"):
+                generate_candidates()
+        except Exception as exc:
+            st.session_state.candidate_run_diagnostics = {
+                "status": "failure", "failed_stage": "candidate synthesis",
+                "error": str(exc), "sampled_paths": 0,
+                "surviving_candidates": 0, "algorithm_families": 0,
+                "rejections": {}, "rejected_paths": [],
+            }
+    render_candidate_diagnostics()
+    for candidate in st.session_state.candidate_portfolio:
         with st.expander(f"{candidate.candidate_name} · {candidate.confidence}", expanded=True):
             st.write({
                 "scale": candidate.stochastic_trace["search_scale"],
@@ -493,7 +814,7 @@ def candidates_page() -> None:
 
 def novelty_page() -> None:
     st.title("Novelty and falsification")
-    for candidate in st.session_state.candidates:
+    for candidate in st.session_state.candidate_portfolio:
         with st.expander(candidate.candidate_name):
             st.write({
                 "novelty status": candidate.novelty_status,
@@ -506,12 +827,13 @@ def novelty_page() -> None:
             })
             st.markdown("\n".join(f"- {test}" for test in candidate.falsification_tests))
     with st.expander("Rejected search paths"):
-        st.json(st.session_state.get("rejected_paths", []))
+        diagnostics = st.session_state.candidate_run_diagnostics or {}
+        st.json(diagnostics.get("rejected_paths", []))
 
 
 def experiment_page() -> None:
     st.title("Minimal experiment")
-    candidates = st.session_state.candidates
+    candidates = st.session_state.candidate_portfolio
     if not candidates:
         st.info("Generate candidates first.")
         return
@@ -542,11 +864,12 @@ def memory_page() -> None:
             memory.save("gap", gap.gap_id, gap)
         for mechanism in st.session_state.mechanisms:
             memory.save("mechanism", mechanism.mechanism_id, mechanism)
-        for family in st.session_state.families:
+        for family in st.session_state.direction_families:
             memory.save("direction_family", family.family_id, family)
-        for candidate in st.session_state.candidates:
+        for candidate in st.session_state.candidate_portfolio:
             memory.save("candidate", candidate.candidate_id, candidate)
-        for index, rejection in enumerate(st.session_state.get("rejected_paths", [])):
+        diagnostics = st.session_state.candidate_run_diagnostics or {}
+        for index, rejection in enumerate(diagnostics.get("rejected_paths", [])):
             fingerprint = "|".join(str(rejection.get(key, ""))
                                    for key in ("gap", "mechanism", "operator"))
             memory.remember_failure(fingerprint, "weak evidence", json.dumps(rejection))

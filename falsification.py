@@ -9,6 +9,13 @@ FORBIDDEN_INFERENCE = {
     "hidden ground-truth states", "ground truth state", "ground-truth state",
 }
 
+SIGNAL_EQUIVALENTS = {
+    "observable deviation": {"prediction residual", "observable error"},
+    "performance signal": {"prediction residual", "online error", "observed loss"},
+    "observation innovation": {"prediction residual", "observable error"},
+    "regime similarity": {"context similarity", "recurrence score"},
+}
+
 
 def information_leakage(required: list[str], available: list[str]) -> list[str]:
     available_text = " ".join(available).casefold()
@@ -17,8 +24,15 @@ def information_leakage(required: list[str], available: list[str]) -> list[str]:
         lower = signal.casefold()
         if any(term in lower for term in FORBIDDEN_INFERENCE):
             failures.append(f"forbidden inference information: {signal}")
-        elif signal not in available and not any(
-            token in available_text for token in lower.split() if len(token) > 4
+        elif (
+            signal not in available
+            and not any(
+                token in available_text for token in lower.split() if len(token) > 4
+            )
+            and not any(
+                equivalent in available_text
+                for equivalent in SIGNAL_EQUIVALENTS.get(lower, set())
+            )
         ):
             failures.append(f"unavailable inference information: {signal}")
     return failures

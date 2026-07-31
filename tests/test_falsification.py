@@ -11,3 +11,10 @@ def test_inference_leakage_rejection():
 
 def test_available_signal_passes():
     assert information_leakage(["regime similarity"], ["regime similarity"]) == []
+
+
+def test_structurally_equivalent_observable_signal_passes():
+    assert information_leakage(
+        ["observable deviation", "performance signal"],
+        ["prediction residual"],
+    ) == []
