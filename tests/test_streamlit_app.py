@@ -169,6 +169,14 @@ def test_candidate_end_to_end_offline_renders_and_persists():
         for candidate in app.session_state["candidate_portfolio"]
         for expander in app.expander
     )
+    assert app.session_state["current_research_run"].selected_gap_snapshot
+    assert all(
+        candidate.selected_gap_snapshot and candidate.alignment_id
+        for candidate in app.session_state["candidate_portfolio"]
+    )
+    assert any(
+        header.value == "Research Result / 研究结果" for header in app.header
+    )
 
     app.button(key="_candidate_regenerate").click().run(timeout=30)
 

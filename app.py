@@ -39,7 +39,7 @@ from query_generation import (
     generate_problem_queries, normalize_cross_domain_problem,
     select_external_domains,
 )
-from research_runs import ResearchRun, SelectedGapSnapshot, StageRun
+from run_models import ResearchRun, SelectedGapSnapshot, StageRun
 from retrieval_service import retrieve_corpus
 from pipeline_quality import generate_quality_warnings
 from research_memory import ResearchMemory
@@ -51,7 +51,7 @@ from evaluation.benchmark_tasks import load_benchmark_tasks
 from evaluation.report_generation import report_json, report_markdown
 from evaluation.run_benchmark import run_offline_benchmark
 from evaluation.schemas import HumanReview
-from research_runs import utc_now
+from run_models import utc_now
 from result_explanation import research_result
 
 PAGES = [

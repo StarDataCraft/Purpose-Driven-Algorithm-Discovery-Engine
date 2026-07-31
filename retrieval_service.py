@@ -11,7 +11,7 @@ from uuid import uuid4
 from app_settings import SETTINGS
 from models import Paper, PurposeContract
 from paper_fetchers import PaperCache, deduplicate_papers, fetch_papers_detailed
-from research_runs import (
+from run_models import (
     ResearchRun, SourceRetrievalResult, StageRun, paper_provenance, utc_now,
 )
 from pipeline_quality import apply_estimated_relevance

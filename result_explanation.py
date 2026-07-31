@@ -6,7 +6,7 @@ from dataclasses import asdict
 from typing import Any
 
 from models import AlgorithmCandidate, AlignmentResult, GapSignature, MechanismSignature
-from research_runs import ResearchRun
+from run_models import ResearchRun
 
 
 def research_result(

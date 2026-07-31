@@ -5,6 +5,15 @@
 > instances consolidate into canonical families; only evidence-gated promoted
 > gaps appear in the main selector.
 
+Deployment startup can be checked from a clean lightweight environment with:
+
+```bash
+python scripts/deployment_smoke_test.py
+```
+
+The supported cloud/CI Python version is 3.12. Enhanced transformer
+dependencies are not required for this check.
+
 目的驱动的跨学科算法发现引擎
 
 This project proposes testable machine-learning research directions by starting with a

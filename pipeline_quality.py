@@ -5,7 +5,7 @@ from __future__ import annotations
 from hashlib import sha1
 
 from models import Paper, PurposeContract
-from research_runs import QualityWarning, ResearchRun
+from run_models import QualityWarning, ResearchRun
 
 
 def estimate_paper_relevance(

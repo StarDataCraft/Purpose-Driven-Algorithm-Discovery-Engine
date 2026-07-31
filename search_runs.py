@@ -1,7 +1,6 @@
-"""Backward-compatible public exports for research-run models.
+"""Compatibility alias for an early deployment import spelling.
 
-The canonical class definitions live in :mod:`run_models`.  This module keeps
-saved code and existing integrations importing ``research_runs`` compatible.
+New code must import the canonical definitions from :mod:`run_models`.
 """
 
 from run_models import (
