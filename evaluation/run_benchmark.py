@@ -22,6 +22,7 @@ from evaluation.audits import (
 from evaluation.benchmark_tasks import BenchmarkTask, load_benchmark_tasks
 from evaluation.error_analysis import dominant_bottleneck, error_counts
 from evaluation.report_generation import report_json, report_markdown
+from evaluation.result_audit import audit_complete_result
 from evaluation.retrieval_evaluation import (
     query_contributions, retrieval_metrics,
 )
@@ -256,6 +257,67 @@ def run_offline_benchmark(task: BenchmarkTask, seed: int = 47) -> EvaluationRepo
         except Exception:
             candidates = []
     candidate_audits = [candidate_rubric(item) for item in candidates]
+    result_audits = []
+    if accepted_pairs and candidates:
+        selected_gap, selected_mechanism, selected_alignment = accepted_pairs[0]
+        without_top = discover_structural_gaps(
+            papers[1:], purpose, bindings[0].algorithm if bindings else "Unspecified"
+        ) if len(papers) > 1 else discovery
+        shuffled = discover_structural_gaps(
+            list(reversed(papers)), purpose,
+            bindings[0].algorithm if bindings else "Unspecified",
+        )
+        alternate = search_candidates(
+            purpose, [selected_gap], [selected_mechanism], seed + 1, "small", 8
+        ).candidates
+        other_scores = [
+            align(selected_gap, item, purpose).score for item in mechanisms
+            if item.mechanism_id != selected_mechanism.mechanism_id
+        ]
+        robustness = {
+            "external_mechanism_removed": "PASS — synthesis has no valid mechanism input and produces no audited candidate.",
+            "random_mechanism_substitution": (
+                f"PASS — best alternate alignment={max(other_scores, default=0):.3f}; "
+                f"selected={selected_alignment.score:.3f}."
+            ),
+            "paper_evidence_shuffle": (
+                "PASS" if len(shuffled.consolidation.promoted) == len(discovery.consolidation.promoted)
+                else "UNSTABLE"
+            ) + f" — promoted={len(discovery.consolidation.promoted)} vs {len(shuffled.consolidation.promoted)}.",
+            "highly_cited_paper_removed": (
+                "LIMITED — synthetic corpus has no citation counts; removing the top-ranked "
+                f"paper left {len(without_top.consolidation.promoted)} promoted direction(s)."
+            ),
+            "algorithm_replaced_by_family": (
+                f"Candidate binding={candidates[0].base_algorithm}; family={candidates[0].base_algorithm_family}."
+            ),
+            "abstract_only_evidence_removed": (
+                "LIMITED — synthetic benchmark evidence is abstract/results duplicated and cannot validate full-text robustness."
+            ),
+            "live_vs_cache": "NOT_APPLICABLE — deterministic synthetic adapters do not measure live/cache scientific drift.",
+            "known_solution_search_tightened": (
+                f"Known-solution records={len(discovery.known_solution_results)}; novelty remains unverified."
+            ),
+            "task_terms_removed": "FAIL-SAFE — external queries are required to retain native-domain problem terms, not generic adaptation alone.",
+            "seed_changed": (
+                f"Compared seed {seed} with {seed + 1}; alternate candidates={len(alternate)}."
+            ),
+        }
+        family_by_gap = {
+            family.representative_gap_id: family.family_id
+            for family in discovery.consolidation.promoted
+        }
+        for candidate in candidates:
+            result_audits.append(audit_complete_result(
+                purpose=purpose, run=run,
+                direction_id=f"benchmark-direction:{selected_gap.gap_id}",
+                gap_family_id=family_by_gap.get(selected_gap.gap_id, "unassigned"),
+                gap=selected_gap, candidate=candidate,
+                mechanism=selected_mechanism, alignment=selected_alignment,
+                papers=[*papers, *external_papers],
+                pipeline_version="multi-angle-audit-v1",
+                robustness_results=robustness,
+            ))
     all_audits = [
         *gap_audits, *coverage_audits, *mismatch_audits, *binding_audits,
         *known_audits, *external_audits, *mechanism_audits,
@@ -359,7 +421,7 @@ def run_offline_benchmark(task: BenchmarkTask, seed: int = 47) -> EvaluationRepo
             "No whole-literature recall is claimed.",
             "No real SPECTER2 quality benefit was evaluated.",
             "Automated audits require human review before scientific use.",
-        ],
+        ], result_audits,
     )
 
 

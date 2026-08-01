@@ -106,6 +106,12 @@ Benchmark version: `{report.benchmark_version}`
 {json.dumps([asdict(item) for item in report.candidate_audits], indent=2)}
 ```
 
+## Ten-angle complete-result audits
+
+```json
+{json.dumps([asdict(item) for item in report.result_audits], indent=2)}
+```
+
 ## Stage funnel
 
 {funnel}

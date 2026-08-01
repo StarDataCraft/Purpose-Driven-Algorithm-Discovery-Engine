@@ -91,8 +91,8 @@ UI support bounded human review and JSONL/CSV export.
 
 ## Persistence and bounds
 
-Research-memory schema version 2 adds generic structural/model records without removing
-legacy tables. Runtime DBs and embedding/model caches are ignored. Fetch, embedding,
+Research-memory schema version 3 adds append-only versioned `ResultAudit` records without
+removing legacy tables. Runtime DBs and embedding/model caches are ignored. Fetch, embedding,
 sentence, graph, annotation, and cache sizes are bounded in `config.py`.
 
 ## Canonical retrieval and provenance
@@ -138,7 +138,10 @@ not replace it. Versioned tasks and optional human annotations feed:
 
 Reports include run/commit/task/query/domain/annotation versions, corpus
 fingerprint, random seed, active model status, and thresholds. Research Memory
-stores optional `HumanReview` records separately from generated artifacts.
+stores optional `HumanReview` records separately from generated artifacts. Complete
+candidates additionally pass through ten independent 0–5 dimensions, adversarial
+counterfactual status, and a self-critique. Any failed dimension makes the final
+decision exploratory; automatic scores never masquerade as human review.
 
 The only production repair justified by the initial synthetic baseline adds a
 controlled structural-topology feature to alignment. Shared words alone still

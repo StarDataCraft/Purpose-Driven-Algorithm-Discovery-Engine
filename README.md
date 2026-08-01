@@ -1,6 +1,8 @@
 # Purpose-Driven Cross-Disciplinary Algorithm Discovery Engine
 
-The primary UI is a self-contained three-part workflow: discover bounded research directions, automatically retrieve external evidence and derive ideas, then read one conclusion-first proposal with explicit state, trigger, rule, and deterministic diagrams. Technical JSON is secondary.
+The primary UI is a self-contained three-part workflow: discover bounded research directions, automatically retrieve external evidence and derive ideas, then read one conclusion-first proposal with explicit state, trigger, rule, deterministic diagrams, and a visible critical review. Technical JSON is secondary.
+
+Every displayed final idea receives a typed ten-perspective `ResultAudit`. A score below 4 remains visible and marks the result exploratory. Audits include adversarial-test status and a concise self-critique, are appended to Research Memory without overwriting earlier pipeline versions, and can be inspected under **Research Tools → Multi-angle result audit**. Synthetic fixtures cannot pass human-evidence or prior-art gates. See [`MULTI_ANGLE_AUDIT_REPORT.md`](MULTI_ANGLE_AUDIT_REPORT.md) and [`SOTA_REVIEW.md`](SOTA_REVIEW.md).
 
 OpenAlex requests use the process-wide client in `openalex_client.py`. An optional key is read only from `OPENALEX_API_KEY` or Streamlit secrets; it is never placed in provenance or UI diagnostics. Without a key, the app uses a conservative anonymous budget. Daily quota exhaustion opens the OpenAlex circuit immediately while arXiv and valid cache results remain usable.
 
@@ -101,9 +103,11 @@ slot-compatibility rules before scoring.
   structural-neighbor warnings, leakage checks, random-signal tests, and kill criteria.
 - `experiment_planner.py`: executable stressor, baseline, ablation, metric, compute, and
   reproducibility plans.
-- `research_memory.py`, `trend_analysis.py`: SQLite success/failure memory and bounded
-  metadata trends. Repeated failures receive increasing penalties.
-- `app.py`: thin ten-page Streamlit workflow.
+- `research_memory.py`, `trend_analysis.py`: SQLite success/failure memory, immutable
+  result-audit history, and bounded metadata trends. Repeated failures receive increasing penalties.
+- `evaluation/result_audit.py`: ten independent result gates, adversarial status,
+  self-critique, and conservative final decisions.
+- `app.py`: thin three-part Streamlit workflow with secondary research tools.
 
 Curated JSON resources live in `data/`; deterministic paper fixtures live in
 `data/offline_fixtures/`.

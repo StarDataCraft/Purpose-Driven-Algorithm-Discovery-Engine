@@ -46,3 +46,15 @@
 ## Acceptance decision
 
 All locally verifiable scientific and engineering gates pass. The production build remains unverified because no deploy target is discoverable from the repository or public GitHub deployment metadata.
+
+## Multi-angle result-audit cycle — 2026-08-01
+
+The application now audits each displayed final idea from ten independent perspectives and persists immutable, version-comparable records in Research Memory. The visible **Critical review / 批判性审查** states the strongest case for and against the idea, likely duplicate, fragile evidence, uncertain mapping, and fastest invalidation experiment. Full scores, evidence, repairs, adversarial status, and raw records remain under Research Tools.
+
+| Task | Original result | Main defect | Dimension | Repair | SOTA considered | Tested | Before | After | Cost | Decision | Limitation |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Recurring drift | Candidate generated | No human-reviewed evidence or sufficient prior-art search | Evidence; novelty | Ten-pass gate and counterfactual record | SPECTER2; MultiVerS | Deterministic audit | 0 final-result dimensions | 10 dimensions; scores 5/3/3/2/5/5/5/5/4/4 | 0 model MB | Exploratory | Synthetic P@10 0.50; no live prior-art recall |
+| Missingness shift | Candidate generated | Same blockers; broad family binding | Evidence; novelty; specificity | Audit plus family counterfactual | SPECTER2; SciNCL | Deterministic audit | 0 dimensions | 10; 5/3/3/2/5/5/4/5/4/4 | 0 model MB | Exploratory | Synthetic P@10 0.50 |
+| Dynamic clustering | Candidate generated | Prior-art search insufficient | Evidence; novelty | Audit plus mechanism and seed checks | SPECTER2; MultiVerS | Deterministic audit | 0 dimensions | 10; 5/3/3/2/5/5/4/5/4/4 | 0 model MB | Exploratory | Synthetic P@10 0.60 |
+
+Models considered: SPECTER2 (Apache-2.0), SciNCL (MIT), and MultiVerS (MIT). Models downloaded/adopted: none. Download size, model RSS, and model latency are therefore 0; production and enhanced mode remain unchanged. Adoption was deferred because no sufficiently large human-reviewed paper/claim set exists for a defensible identical-corpus comparison. Detailed method metadata and decisions are in `SOTA_REVIEW.md`; measured audit and adversarial findings are in `MULTI_ANGLE_AUDIT_REPORT.md`.

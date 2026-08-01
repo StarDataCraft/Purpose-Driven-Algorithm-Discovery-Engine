@@ -51,6 +51,7 @@ from weak_supervision import GapLabel, label_sentence
 from evaluation.benchmark_tasks import load_benchmark_tasks
 from evaluation.report_generation import report_json, report_markdown
 from evaluation.run_benchmark import run_offline_benchmark
+from evaluation.result_audit import audit_complete_result, audit_summary
 from evaluation.schemas import HumanReview
 from run_models import utc_now
 from result_explanation import research_result
@@ -235,6 +236,7 @@ def initialize_state() -> None:
         "current_idea_portfolio": [],
         "selected_idea_id": "",
         "current_result_explanation": None,
+        "current_result_audit": None,
         "current_diagram_specs": [],
         "current_external_result": None,
         "active_primary_step": PRIMARY_STEPS[0],
@@ -348,6 +350,7 @@ def invalidate_downstream_for_purpose() -> None:
         "selected_direction_snapshot": None, "selected_gap_family_id": "",
         "current_idea_portfolio": [], "selected_idea_id": "",
         "current_result_explanation": None, "current_diagram_specs": [],
+        "current_result_audit": None,
         "current_external_result": None,
     }.items():
         st.session_state[key] = empty
@@ -365,6 +368,7 @@ def invalidate_downstream_for_gap() -> None:
     st.session_state.current_idea_portfolio = []
     st.session_state.selected_idea_id = ""
     st.session_state.current_result_explanation = None
+    st.session_state.current_result_audit = None
     st.session_state.current_diagram_specs = []
 
 
@@ -634,7 +638,8 @@ def sidebar() -> str:
             [
                 "None", "Research run provenance", "Full retrieval diagnostics",
                 "Coverage and evidence audit", "Structural alignment audit",
-                "Quality Evaluation", "Annotation tools", "Research memory",
+                "Multi-angle result audit", "Quality Evaluation",
+                "Annotation tools", "Research memory",
                 "Build information",
             ],
             key="_research_tool",
@@ -660,6 +665,12 @@ def quality_evaluation_panel() -> None:
             st.session_state.quality_evaluation_report = run_offline_benchmark(
                 tasks[task_id]
             )
+            memory = ResearchMemory(DEFAULT_DB)
+            try:
+                for audit in st.session_state.quality_evaluation_report.result_audits:
+                    memory.save_result_audit(audit)
+            finally:
+                memory.close()
     report = st.session_state.quality_evaluation_report
     if report:
         st.subheader("Retrieval review")
@@ -701,6 +712,9 @@ def quality_evaluation_panel() -> None:
         st.info(f"Dominant bottleneck: {report.dominant_bottleneck}")
         st.subheader("Before/after comparison")
         st.json(report.before_after)
+        st.subheader("Complete result audits")
+        for audit in report.result_audits:
+            render_result_audit(audit, full=True)
         st.download_button(
             "Export evaluation JSON", report_json(report),
             f"{report.task_id}-evaluation.json", key="_quality_export_json",
@@ -1999,6 +2013,7 @@ def select_direction(direction_id: str) -> None:
 def select_idea(candidate_id: str) -> None:
     st.session_state.selected_idea_id = candidate_id
     st.session_state.current_result_explanation = None
+    st.session_state.current_result_audit = None
     st.session_state.current_diagram_specs = []
     st.session_state["_primary_step"] = PRIMARY_STEPS[2]
     st.session_state.active_primary_step = PRIMARY_STEPS[2]
@@ -2022,6 +2037,7 @@ def set_external_live_retry() -> None:
         "mechanisms": [], "rejected_mechanisms": [], "alignments": [],
         "candidate_portfolio": [], "current_idea_portfolio": [],
         "current_result_explanation": None, "current_diagram_specs": [],
+        "current_result_audit": None,
     }.items():
         st.session_state[key] = value
 
@@ -2585,6 +2601,69 @@ def explanation_markdown(explanation: object) -> str:
     ])
 
 
+def build_and_persist_current_audit(candidate: object, derivation: object) -> object | None:
+    """Create exactly one immutable audit for the displayed result version."""
+    run = st.session_state.current_research_run
+    gap = st.session_state.selected_gap
+    if not run or not gap:
+        return None
+    mechanism = next((
+        item for item in st.session_state.mechanisms
+        if item.mechanism_id == derivation.mechanism_id
+    ), None)
+    alignment = next((
+        item for item in st.session_state.alignments
+        if item.mechanism_id == derivation.mechanism_id
+        and item.gap_id == gap.gap_id
+    ), None)
+    if not mechanism or not alignment:
+        return None
+    audit = audit_complete_result(
+        purpose=st.session_state.purpose, run=run,
+        direction_id=derivation.direction_id,
+        gap_family_id=derivation.gap_family_id, gap=gap,
+        candidate=candidate, mechanism=mechanism, alignment=alignment,
+        papers=[*st.session_state.ml_papers, *st.session_state.external_papers],
+        pipeline_version=derivation.pipeline_version,
+    )
+    memory = ResearchMemory(DEFAULT_DB)
+    try:
+        memory.save_result_audit(audit)
+    finally:
+        memory.close()
+    return audit
+
+
+def render_result_audit(audit: object, *, full: bool = False) -> None:
+    """Render decision first; keep the complete ten-pass record secondary."""
+    if not audit:
+        st.info("A complete candidate result is required before auditing.")
+        return
+    summary = audit_summary(audit)
+    if str(audit.final_decision).startswith("PASS"):
+        st.success(f"Audit decision: {audit.final_decision}")
+    else:
+        st.warning(f"Audit decision: {audit.final_decision}")
+    st.dataframe([{
+        "Perspective": item.name.replace("_", " ").title(),
+        "Score": f"{item.score}/5",
+        "Gate": "PASS" if item.passed else "FAIL",
+        "Observed evidence": "; ".join(item.observed_evidence),
+        "Recommended action": item.recommended_action,
+        "SOTA may help": "Yes" if item.state_of_art_might_help else "No",
+    } for item in audit.audit_dimensions], use_container_width=True)
+    if full:
+        st.subheader("Adversarial and counterfactual robustness")
+        st.dataframe([{
+            "Test": key.replace("_", " ").title(), "Result": value,
+        } for key, value in audit.robustness_results.items()],
+            use_container_width=True)
+        st.subheader("Recommended repairs")
+        render_bullets(audit.recommended_repairs)
+        with st.expander("Complete immutable audit record"):
+            st.json(asdict(audit))
+
+
 def explain_idea_page() -> None:
     st.title("Explain the idea / 解释新想法")
     candidate = next((
@@ -2622,6 +2701,9 @@ def explain_idea_page() -> None:
         st.session_state.current_diagram_specs = specs
         st.session_state.current_result_explanation = build_idea_explanation(
             st.session_state.purpose, direction, derivation, candidate, specs
+        )
+        st.session_state.current_result_audit = build_and_persist_current_audit(
+            candidate, derivation
         )
         st.session_state.ux_performance["part_3_render_seconds"] = round(
             time.perf_counter() - render_started, 4
@@ -2661,6 +2743,19 @@ def explain_idea_page() -> None:
         explanation.main_risks,
         "Failure modes remain insufficiently characterized.",
     )
+    audit = st.session_state.current_result_audit
+    if audit:
+        st.header("Critical review / 批判性审查")
+        critique = audit.self_critique
+        render_fields({
+            "Audit decision": audit.final_decision,
+            "Strongest reason to believe": critique.get("strongest_reason_to_believe"),
+            "Strongest reason to reject": critique.get("strongest_reason_to_reject"),
+            "Most likely duplicate": critique.get("most_likely_duplicate"),
+            "Most fragile evidence": critique.get("most_fragile_evidence_link"),
+            "Most uncertain mapping": critique.get("most_uncertain_mapping"),
+            "Fastest invalidation experiment": critique.get("fastest_invalidation_experiment"),
+        })
     st.subheader("What is supported")
     render_bullets(explanation.supported_claims)
     st.subheader("What is inferred")
@@ -2738,6 +2833,24 @@ def research_tools_panel() -> None:
         gap_radar_page()
     elif tool == "Structural alignment audit":
         alignment_page()
+    elif tool == "Multi-angle result audit":
+        render_result_audit(st.session_state.current_result_audit, full=True)
+        memory = ResearchMemory(DEFAULT_DB)
+        try:
+            previous = memory.result_audits(
+                st.session_state.selected_idea_id
+            )
+        finally:
+            memory.close()
+        if len(previous) > 1:
+            st.subheader("Pipeline-version history")
+            st.dataframe([{
+                "Audit": item["payload"].get("audit_id"),
+                "Pipeline": item["payload"].get("pipeline_version"),
+                "Commit": item["payload"].get("commit_sha"),
+                "Decision": item["payload"].get("final_decision"),
+                "Timestamp": item["payload"].get("audit_timestamp"),
+            } for item in previous], use_container_width=True)
     elif tool == "Quality Evaluation":
         quality_evaluation_panel()
     elif tool == "Annotation tools":

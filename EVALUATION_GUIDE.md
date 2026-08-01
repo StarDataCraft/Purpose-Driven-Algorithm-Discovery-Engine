@@ -67,8 +67,18 @@ Fake dense backends are software tests labeled `NON-SCIENTIFIC TEST`; they
 cannot establish SPECTER2 benefit.
 
 Audits keep author-stated evidence distinct from system-inferred structural
-gaps. Candidate evaluation exposes ten separate 0–4 rubric components rather
-than hiding weaknesses in one total.
+gaps. Candidate generation retains its ten-component 0–4 rubric; the final
+user-visible result separately receives ten independent 0–5 review passes for
+problem fit, literature, gap evidence, novelty, mechanism, alignment,
+executability, experiment quality, readability, and engineering. Every pass
+records evidence, problems, an action, and whether a non-generative method may
+help. Any score below 4 makes the result explicitly exploratory.
+
+The benchmark runner also records ten adversarial/counterfactual outcomes.
+Tests that cannot be supported by fixture metadata—citation removal,
+full-text-only evidence, or live/cache scientific drift—are marked limited or
+not applicable rather than treated as passes. Full audit records are included
+in JSON/Markdown exports and appended to Research Memory when run in the UI.
 
 ## Annotation workflow
 

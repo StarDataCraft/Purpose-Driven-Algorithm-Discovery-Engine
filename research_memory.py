@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS structural_records (
  payload TEXT NOT NULL, model_mode TEXT, model_version TEXT,
  created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(kind, record_key)
 );
-INSERT OR IGNORE INTO schema_migrations(version) VALUES (2);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (3);
 """
 
 FAILURE_CATEGORIES = {
@@ -121,6 +121,25 @@ class ResearchMemory:
 
     def evaluation_reviews(self) -> list[dict[str, Any]]:
         return self.list("evaluation_review")
+
+    def save_result_audit(self, audit: Any) -> None:
+        """Append one immutable versioned audit; never replace older audits."""
+        payload = asdict(audit) if is_dataclass(audit) else audit
+        audit_id = str(payload["audit_id"])
+        self.connection.execute(
+            "INSERT INTO records(kind,record_key,payload) VALUES(?,?,?)",
+            ("result_audit", audit_id, json.dumps(payload, default=str)),
+        )
+        self.connection.commit()
+
+    def result_audits(self, candidate_id: str = "") -> list[dict[str, Any]]:
+        records = self.list("result_audit")
+        if not candidate_id:
+            return records
+        return [
+            item for item in records
+            if item["payload"].get("candidate_id") == candidate_id
+        ]
 
     def schema_version(self) -> int:
         row = self.connection.execute(

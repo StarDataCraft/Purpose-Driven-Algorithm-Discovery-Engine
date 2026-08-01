@@ -120,6 +120,19 @@ def test_part_3_result_diagrams_experiment_and_secondary_json():
     assert "Closest known methods" in headers
     assert "Fastest useful experiment" in headers
     assert "Supporting papers" in headers
+    assert "Critical review / 批判性审查" in headers
+    audit = app.session_state["current_result_audit"]
+    assert len(audit.audit_dimensions) == 10
+    assert {item.name for item in audit.audit_dimensions} == {
+        "user_problem_fit", "literature_retrieval_quality",
+        "evidence_gap_validity", "known_solution_novelty",
+        "external_mechanism_quality", "structural_alignment_quality",
+        "algorithm_specificity_executability",
+        "falsifiability_experiment_quality", "readability_decision_value",
+        "engineering_cost_deployment",
+    }
+    assert audit.final_decision.startswith("EXPLORATORY")
+    assert len(audit.robustness_results) == 10
     assert any("Raw JSON" in item.label for item in app.expander)
     assert not app.exception
 
