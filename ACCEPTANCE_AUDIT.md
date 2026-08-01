@@ -2,6 +2,8 @@
 
 The 2026-07-31 overnight audit adds regression coverage for slot-aware modifications, explicit one-page proposal sections, direct-versus-contextual paper roles, and complete deterministic diagram fallbacks. Final evidence is recorded in `OVERNIGHT_FINAL_REPORT.md`.
 
+The 2026-08-01 extended audit adds daily/transient OpenAlex 429 classification, shared limiting, query budgets, circuit breaking, cache coalescing, credential redaction/scan tests, partial arXiv continuation, two complete direction paths, diagram failure fallback, and three expanded scientific benchmark funnels.
+
 The retrieval-calibration iteration separates paper-count semantics, labels
 cache-only provenance explicitly, consolidates raw gaps, blocks weak
 task-incompatible focused bindings, stores selected-gap snapshots and alignment

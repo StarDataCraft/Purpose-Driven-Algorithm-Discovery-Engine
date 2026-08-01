@@ -2,6 +2,8 @@
 
 Part 3 explicitly renders Problem, Current behavior, Proposed change, Expected result, closest methods, risks, uncertainty, supporting papers, and the minimum experiment. The proposed change exposes the exact slot, new state, trigger, rule, and inference-time information before technical details.
 
+Part 2 treats OpenAlex and arXiv independently. If OpenAlex reaches a daily or short-term limit, its circuit stops later calls while arXiv and permitted cache entries continue. The page shows one concise source-status message; request-level details remain under Technical diagnostics.
+
 The primary interface presents the unchanged scientific pipeline in three
 researcher-oriented parts.
 

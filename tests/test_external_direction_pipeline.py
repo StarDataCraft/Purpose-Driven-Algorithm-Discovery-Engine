@@ -84,12 +84,16 @@ def test_cache_hit_and_cache_miss_are_explicit(
     gap = gaps[direction.selected_gap_id]
     discover_external_mechanisms_for_direction(
         purpose=purpose, direction=direction, gap=gap, parent_run=run,
-        search_policy=SearchPolicy("LIVE", sources=("openalex",)),
+        search_policy=SearchPolicy(
+            "LIVE", sources=("openalex",), maximum_per_query=12,
+        ),
         adapters=adapters(external_papers), cache_directory=tmp_path / "hit",
     )
     cached = discover_external_mechanisms_for_direction(
         purpose=purpose, direction=direction, gap=gap, parent_run=run,
-        search_policy=SearchPolicy("CACHE", sources=("openalex",)),
+        search_policy=SearchPolicy(
+            "CACHE", sources=("openalex",), maximum_per_query=12,
+        ),
         cache_directory=tmp_path / "hit",
     )
     assert cached.retrieval_run.actual_search_mode == "CACHE"
@@ -158,8 +162,36 @@ def test_external_queries_do_not_append_ml_modification_slots(
         for queries in result.accepted_queries_by_domain.values()
         for query in queries
     )
-    assert len(result.accepted_queries_by_domain) <= 3
-    assert all(len(queries) <= 2 for queries in result.accepted_queries_by_domain.values())
+    assert len(result.accepted_queries_by_domain) <= 4
+    assert result.stage_diagnostics["stage_one_query_count"] <= 6
+    assert result.stage_diagnostics["stage_two_query_count"] <= 4
+    assert sum(map(len, result.accepted_queries_by_domain.values())) <= 10
+
+
+def test_adaptive_external_search_stops_after_sufficient_stage_one_evidence(
+    tmp_path, purpose, ml_papers, external_papers,
+):
+    run, directions, gaps = context(purpose, ml_papers)
+    direction = directions[0]
+    gap = gaps[direction.selected_gap_id]
+    extra = [
+        Paper(f"extra:{index}", f"External evidence {index}",
+              f"Operational process context number {index} with distinct evidence.",
+              2025, "openalex")
+        for index in range(3)
+    ]
+    sufficient = [*external_papers, *extra]
+    result = discover_external_mechanisms_for_direction(
+        purpose=purpose, direction=direction, gap=gap, parent_run=run,
+        search_policy=SearchPolicy(
+            "LIVE", sources=("openalex",), maximum_per_query=12,
+        ), adapters={"openalex": lambda *args: sufficient},
+        cache_directory=tmp_path,
+    )
+    assert len(result.papers) >= 8
+    assert len(result.mechanisms) >= 3
+    assert result.stage_diagnostics["adaptive_stage_two_used"] is False
+    assert result.stage_diagnostics["stage_two_query_count"] == 0
 
 
 def test_no_mechanism_and_no_alignment_have_stage_specific_errors(

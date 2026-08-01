@@ -2,6 +2,8 @@
 
 Candidate changes are resolved from the delta field matching the affected component. Aggregation, routing, memory, objective, initialization, stopping, and component lifecycle are not incorrectly treated as update-rule changes.
 
+Model-selection proposals follow the same rule. They must show candidate-score state, an observable trigger, and a bounded selection/verification rule rather than a generic “choose a better model” statement.
+
 The Candidate Algorithms page starts with **Research Result / 研究结果**. It is
 the primary interpretation layer; raw JSON is retained only in Technical
 details.

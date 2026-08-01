@@ -2,6 +2,8 @@
 
 The primary UI is a self-contained three-part workflow: discover bounded research directions, automatically retrieve external evidence and derive ideas, then read one conclusion-first proposal with explicit state, trigger, rule, and deterministic diagrams. Technical JSON is secondary.
 
+OpenAlex requests use the process-wide client in `openalex_client.py`. An optional key is read only from `OPENALEX_API_KEY` or Streamlit secrets; it is never placed in provenance or UI diagnostics. Without a key, the app uses a conservative anonymous budget. Daily quota exhaustion opens the OpenAlex circuit immediately while arXiv and valid cache results remain usable.
+
 > Calibrated evidence flow: deduplicated candidate papers, automatic relevance,
 > human-reviewed relevance, and evidence-bearing papers are distinct. Raw gap
 > instances consolidate into canonical families; only evidence-gated promoted

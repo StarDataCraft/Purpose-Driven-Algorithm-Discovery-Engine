@@ -2,6 +2,8 @@
 
 Presentation uses `candidate_modification()` as the canonical slot-aware view of an algorithm delta. It selects objective, update, memory, routing, aggregation, initialization, stopping, or lifecycle changes from the actual affected component.
 
+`openalex_client.py` owns the shared HTTP session, serialized limiter, credential attachment, typed rate-limit state, daily/transient 429 classification, retry policy, circuit breaker, and run-scoped query budgets. `retrieval_service.py` owns stable cache identity and source isolation. External retrieval begins with no more than three native domains and two queries per domain; ML slots are introduced only during structural alignment.
+
 ## Calibrated evidence and provenance
 
 Each operation records a stage-scoped `StageRun`; query/source counts,

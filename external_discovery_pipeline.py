@@ -10,6 +10,8 @@ from alignment import align
 from app_settings import SETTINGS
 from mechanism_mining import cross_domain_only, extract_mechanisms
 from models import AlignmentResult, GapSignature, MechanismSignature, Paper, PurposeContract
+from openalex_client import default_query_budget, get_openalex_client
+from paper_fetchers import deduplicate_papers
 from query_generation import (
     CrossDomainProblemSignature, DomainSelection, generate_external_queries,
     normalize_cross_domain_problem, select_external_domains,
@@ -111,9 +113,12 @@ def discover_external_mechanisms_for_direction(
     base_queries = generate_external_queries(gap, selected_domains)
     # Keep external queries native to their source discipline. The ML slot is
     # introduced later during typed structural alignment, never retrieval.
+    all_queries_by_domain = {
+        domain: list(queries) for domain, queries in base_queries.items()
+    }
     queries_by_domain = {
         domain: list(queries[:2])
-        for domain, queries in list(base_queries.items())[:3]
+        for domain, queries in list(all_queries_by_domain.items())[:3]
     }
     query_pairs = [
         (domain, query) for domain, queries in queries_by_domain.items()
@@ -129,6 +134,10 @@ def discover_external_mechanisms_for_direction(
 
     requested_mode = search_policy.requested_mode.upper().replace(" ", "_")
     progress(35, "3/6 Searching external literature")
+    openalex_client = get_openalex_client()
+    openalex_budget = openalex_client.begin_run(
+        default_query_budget(openalex_client.authentication_mode)
+    )
     papers, retrieval_run = retrieve_corpus(
         purpose, queries, requested_mode=requested_mode,
         sources=list(search_policy.sources),
@@ -141,7 +150,72 @@ def discover_external_mechanisms_for_direction(
         cache_directory=cache_directory,
         fixture_path="data/offline_fixtures/external_papers.json",
         stage_name="external_retrieval",
+        openalex_client_instance=openalex_client,
+        openalex_budget=openalex_budget,
     )
+    stage_two_used = False
+    initial_mechanisms, _ = extract_mechanisms(papers)
+    domain_items = list(all_queries_by_domain.items())
+    stage_two_pairs = [
+        (domain, domain_queries[2])
+        for domain, domain_queries in domain_items[:3]
+        if len(domain_queries) > 2
+    ]
+    if len(domain_items) > 3 and domain_items[3][1]:
+        stage_two_pairs.append((domain_items[3][0], domain_items[3][1][0]))
+    stage_two_pairs = stage_two_pairs[:4]
+    needs_live_expansion = (
+        requested_mode == "LIVE"
+        and (len(papers) < 8 or len(cross_domain_only(initial_mechanisms)) < 3)
+        and openalex_client.state.circuit_state == "CLOSED"
+    )
+    # Cache replay must probe the complete bounded query plan: a prior live run
+    # may have expanded adaptively, and cache-only mode cannot infer that choice
+    # from the stage-one response alone.
+    needs_cache_replay = requested_mode == "CACHE"
+    if stage_two_pairs and (needs_live_expansion or needs_cache_replay):
+        stage_two_used = True
+        stage_two_queries = [query for _, query in stage_two_pairs]
+        more_papers, more_run = retrieve_corpus(
+            purpose, stage_two_queries, requested_mode=requested_mode,
+            sources=list(search_policy.sources),
+            maximum_per_query=search_policy.maximum_per_query,
+            maximum_total=search_policy.maximum_total,
+            allow_cache=search_policy.allow_cache,
+            force_fresh=search_policy.force_fresh,
+            allow_offline_fallback=False, adapters=adapters,
+            cache_directory=cache_directory, stage_name="external_retrieval",
+            openalex_client_instance=openalex_client,
+            openalex_budget=openalex_budget,
+        )
+        for domain, query in stage_two_pairs:
+            queries_by_domain.setdefault(domain, []).append(query)
+        second_offset = len(query_pairs)
+        for paper in more_papers:
+            indices = [
+                int(item.split(":", 1)[1]) for item in paper.query_ids
+                if item.startswith("q:")
+            ]
+            if indices and indices[0] < len(stage_two_pairs):
+                paper.domain = stage_two_pairs[indices[0]][0]
+                paper.query_ids = [
+                    f"q:{second_offset + indices[0]}"
+                    if item.startswith("q:") else item
+                    for item in paper.query_ids
+                ]
+        query_pairs.extend(stage_two_pairs)
+        queries.extend(stage_two_queries)
+        papers = deduplicate_papers([*papers, *more_papers])[
+            :search_policy.maximum_total
+        ]
+        retrieval_run.source_results.extend(more_run.source_results)
+        retrieval_run.source_failures.update(more_run.source_failures)
+        retrieval_run.stages.extend(more_run.stages)
+        retrieval_run.raw_paper_count += more_run.raw_paper_count
+        retrieval_run.query_count += more_run.query_count
+        retrieval_run.total_query_count += more_run.total_query_count
+        retrieval_run.external_query_count += more_run.external_query_count
+        retrieval_run.finalize_from_papers(papers)
     retrieval_run.parent_run_id = parent_run.run_id
     retrieval_run.selected_direction_id = direction.direction_id
     retrieval_run.selected_gap_id = gap.gap_id
@@ -267,6 +341,12 @@ def discover_external_mechanisms_for_direction(
             "query_count": len(queries), "paper_count": len(papers),
             "mechanism_count": len(mechanisms),
             "accepted_alignment_count": len(accepted),
+            "adaptive_stage_two_used": stage_two_used,
+            "stage_one_query_count": (
+                len(queries) - len(stage_two_pairs) if stage_two_used
+                else len(queries)
+            ),
+            "stage_two_query_count": len(stage_two_pairs) if stage_two_used else 0,
             "search_policy": search_policy.to_dict(),
         }, warnings, errors,
     )

@@ -2,6 +2,8 @@
 
 For readability, verify that the visible proposal—not raw JSON—names the problem, current behavior, exact slot, state, trigger, rule, inference inputs, expected result, closest methods, main risk, experiment, and kill criterion.
 
+The stage funnel distinguishes evidence events, raw gap instances, canonical families, and promoted directions. Alignment evaluation covers every promoted representative instead of selecting the first raw gap. Task-specific synthetic external papers are CI fixtures and must never be described as live scientific evidence.
+
 Enhanced mode lazily loads `allenai/specter2_base` with the
 `allenai/specter2` retrieval/search adapter while preserving sparse and dense
 scores. It is not recommended without reviewed-label Precision@5/10/20 and

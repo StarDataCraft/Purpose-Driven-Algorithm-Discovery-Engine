@@ -11,7 +11,8 @@ from uuid import uuid4
 from app_settings import SETTINGS
 from models import Paper, PurposeContract
 from openalex_client import (
-    OpenAlexRequestError, default_query_budget, get_openalex_client,
+    OpenAlexClient, OpenAlexRequestError, QueryBudget, default_query_budget,
+    get_openalex_client,
 )
 from paper_fetchers import (
     PaperCache, deduplicate_papers, fetch_openalex, fetch_arxiv,
@@ -58,6 +59,8 @@ def retrieve_corpus(
     fixture_path: str = "",
     engine_mode: str = SETTINGS.gap_engine_mode,
     stage_name: str = "broad_ml_retrieval",
+    openalex_client_instance: OpenAlexClient | None = None,
+    openalex_budget: QueryBudget | None = None,
 ) -> tuple[list[Paper], ResearchRun]:
     """Retrieve papers and derive truth from paper-level provenance."""
     started = time.perf_counter()
@@ -76,10 +79,11 @@ def retrieve_corpus(
     sources = sources or ["openalex", "arxiv"]
     run.sources_attempted = list(sources)
     cache = PaperCache(cache_directory)
-    openalex_client = get_openalex_client()
-    openalex_budget = openalex_client.begin_run(
-        default_query_budget(openalex_client.authentication_mode)
-    )
+    openalex_client = openalex_client_instance or get_openalex_client()
+    if openalex_budget is None:
+        openalex_budget = openalex_client.begin_run(
+            default_query_budget(openalex_client.authentication_mode)
+        )
     if adapters is None:
         adapters = {
             "openalex": lambda query, maximum, start, end: fetch_openalex(
