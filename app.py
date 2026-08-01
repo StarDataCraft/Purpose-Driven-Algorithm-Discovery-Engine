@@ -48,11 +48,10 @@ from search_engine import search_candidates
 from signatures import load_mechanism_seeds
 from trend_analysis import trend_indicators
 from weak_supervision import GapLabel, label_sentence
-from evaluation.benchmark_tasks import load_benchmark_tasks
-from evaluation.report_generation import report_json, report_markdown
-from evaluation.run_benchmark import run_offline_benchmark
-from evaluation.result_audit import audit_complete_result, audit_summary
-from evaluation.schemas import HumanReview
+from build_info import build_information
+from evaluation.capabilities import (
+    AuditBuildResult, load_result_audit_capability,
+)
 from run_models import utc_now
 from result_explanation import research_result
 from ux_models import (
@@ -237,6 +236,8 @@ def initialize_state() -> None:
         "selected_idea_id": "",
         "current_result_explanation": None,
         "current_result_audit": None,
+        "current_audit_build_result": None,
+        "audit_unavailable_notice_shown": False,
         "current_diagram_specs": [],
         "current_external_result": None,
         "active_primary_step": PRIMARY_STEPS[0],
@@ -351,6 +352,7 @@ def invalidate_downstream_for_purpose() -> None:
         "current_idea_portfolio": [], "selected_idea_id": "",
         "current_result_explanation": None, "current_diagram_specs": [],
         "current_result_audit": None,
+        "current_audit_build_result": None,
         "current_external_result": None,
     }.items():
         st.session_state[key] = empty
@@ -369,6 +371,7 @@ def invalidate_downstream_for_gap() -> None:
     st.session_state.selected_idea_id = ""
     st.session_state.current_result_explanation = None
     st.session_state.current_result_audit = None
+    st.session_state.current_audit_build_result = None
     st.session_state.current_diagram_specs = []
 
 
@@ -651,6 +654,23 @@ def quality_evaluation_panel() -> None:
     """Optional benchmark and human-review surface outside the ten-step flow."""
     st.divider()
     st.header("Quality Evaluation")
+    try:
+        from evaluation.benchmark_tasks import load_benchmark_tasks
+        from evaluation.report_generation import report_json, report_markdown
+        from evaluation.run_benchmark import run_offline_benchmark
+        from evaluation.schemas import HumanReview
+    except Exception as exc:
+        st.warning(
+            "Quality evaluation is temporarily unavailable. The primary "
+            "research workflow remains available."
+        )
+        with st.expander("Technical details"):
+            st.write({
+                "Error type": type(exc).__name__,
+                "Sanitized error": " ".join(str(exc).split())[:500],
+                "Recommended action": "Reboot or redeploy the current main commit.",
+            })
+        return
     st.warning(
         "Automated quality metrics are meaningful only against reviewed "
         "annotations. Synthetic offline labels are CI fixtures, not ground truth."
@@ -2014,6 +2034,7 @@ def select_idea(candidate_id: str) -> None:
     st.session_state.selected_idea_id = candidate_id
     st.session_state.current_result_explanation = None
     st.session_state.current_result_audit = None
+    st.session_state.current_audit_build_result = None
     st.session_state.current_diagram_specs = []
     st.session_state["_primary_step"] = PRIMARY_STEPS[2]
     st.session_state.active_primary_step = PRIMARY_STEPS[2]
@@ -2038,6 +2059,7 @@ def set_external_live_retry() -> None:
         "candidate_portfolio": [], "current_idea_portfolio": [],
         "current_result_explanation": None, "current_diagram_specs": [],
         "current_result_audit": None,
+        "current_audit_build_result": None,
     }.items():
         st.session_state[key] = value
 
@@ -2601,12 +2623,30 @@ def explanation_markdown(explanation: object) -> str:
     ])
 
 
-def build_and_persist_current_audit(candidate: object, derivation: object) -> object | None:
-    """Create exactly one immutable audit for the displayed result version."""
+def build_and_persist_current_audit(
+    candidate: object, derivation: object,
+) -> AuditBuildResult:
+    """Build/persist optional auditing without invalidating the core result."""
+    capability = load_result_audit_capability(strict=False)
+    if not capability.available or not capability.audit_complete_result:
+        return AuditBuildResult(
+            "UNAVAILABLE", None,
+            "Optional result audit unavailable. The main research result is still available.",
+            {
+                "error_type": capability.error_type,
+                "error_message": capability.error_message,
+                "module_path": capability.module_path,
+                "schema_version": capability.schema_version,
+            }, capability.schema_version,
+        )
     run = st.session_state.current_research_run
     gap = st.session_state.selected_gap
     if not run or not gap:
-        return None
+        return AuditBuildResult(
+            "INCOMPLETE_INPUT", None,
+            "The result audit needs a complete run and selected gap.", {},
+            capability.schema_version,
+        )
     mechanism = next((
         item for item in st.session_state.mechanisms
         if item.mechanism_id == derivation.mechanism_id
@@ -2617,33 +2657,102 @@ def build_and_persist_current_audit(candidate: object, derivation: object) -> ob
         and item.gap_id == gap.gap_id
     ), None)
     if not mechanism or not alignment:
-        return None
-    audit = audit_complete_result(
-        purpose=st.session_state.purpose, run=run,
-        direction_id=derivation.direction_id,
-        gap_family_id=derivation.gap_family_id, gap=gap,
-        candidate=candidate, mechanism=mechanism, alignment=alignment,
-        papers=[*st.session_state.ml_papers, *st.session_state.external_papers],
-        pipeline_version=derivation.pipeline_version,
-    )
-    memory = ResearchMemory(DEFAULT_DB)
+        return AuditBuildResult(
+            "INCOMPLETE_INPUT", None,
+            "The result audit needs the selected mechanism and alignment.", {},
+            capability.schema_version,
+        )
     try:
-        memory.save_result_audit(audit)
-    finally:
-        memory.close()
-    return audit
+        audit = capability.audit_complete_result(
+            purpose=st.session_state.purpose, run=run,
+            direction_id=derivation.direction_id,
+            gap_family_id=derivation.gap_family_id, gap=gap,
+            candidate=candidate, mechanism=mechanism, alignment=alignment,
+            papers=[*st.session_state.ml_papers, *st.session_state.external_papers],
+            pipeline_version=derivation.pipeline_version,
+        )
+    except Exception as exc:
+        return AuditBuildResult(
+            "FAILED", None,
+            "Optional result audit failed. The main research result is still available.",
+            {"error_type": type(exc).__name__,
+             "error_message": " ".join(str(exc).split())[:500]},
+            capability.schema_version,
+        )
+    try:
+        memory = ResearchMemory(DEFAULT_DB)
+        try:
+            memory.save_result_audit(audit)
+        finally:
+            memory.close()
+    except Exception as exc:
+        return AuditBuildResult(
+            "FAILED", audit,
+            "The result audit was built but could not be saved to Research Memory.",
+            {"error_type": type(exc).__name__,
+             "error_message": " ".join(str(exc).split())[:500]},
+            capability.schema_version,
+        )
+    return AuditBuildResult(
+        "COMPLETE", audit, "Multi-angle result audit complete.", {},
+        capability.schema_version,
+    )
 
 
-def render_result_audit(audit: object, *, full: bool = False) -> None:
+def render_audit_unavailable(build_result: AuditBuildResult) -> None:
+    """One concise user message plus fingerprint-rich technical diagnostics."""
+    if not st.session_state.audit_unavailable_notice_shown:
+        if build_result.status == "UNAVAILABLE":
+            st.warning(
+                "Optional result audit unavailable. The main research result is still "
+                "available. This deployment loaded an incompatible audit module version."
+            )
+        else:
+            st.warning(
+                "Optional result audit failed. The main research result is still available."
+            )
+        st.session_state.audit_unavailable_notice_shown = True
+    with st.expander("Technical details · audit capability"):
+        info = build_information(SETTINGS.gap_engine_mode)
+        st.write({
+            "Error type": build_result.technical_error.get("error_type", "unknown"),
+            "Sanitized error": build_result.technical_error.get("error_message", "not reported"),
+            "Expected audit schema version": build_result.capability_version,
+            "Running commit": info["commit_sha"],
+            "Source fingerprints": {
+                key: value[:8] for key, value in info["source_fingerprints"].items()
+            },
+            "Recommended action": "Reboot or redeploy the current main commit.",
+        })
+
+
+def render_result_audit(
+    audit: object, *, full: bool = False,
+    build_result: AuditBuildResult | None = None,
+) -> None:
     """Render decision first; keep the complete ten-pass record secondary."""
+    capability = load_result_audit_capability(strict=False)
+    if not capability.available:
+        render_audit_unavailable(build_result or AuditBuildResult(
+            "UNAVAILABLE", None, "Optional result audit unavailable.",
+            {"error_type": capability.error_type,
+             "error_message": capability.error_message},
+            capability.schema_version,
+        ))
+        return
     if not audit:
         st.info("A complete candidate result is required before auditing.")
         return
-    summary = audit_summary(audit)
+    if capability.audit_summary:
+        capability.audit_summary(audit)
     if str(audit.final_decision).startswith("PASS"):
         st.success(f"Audit decision: {audit.final_decision}")
     else:
         st.warning(f"Audit decision: {audit.final_decision}")
+    if full and build_result and build_result.status == "FAILED":
+        st.warning(build_result.user_message)
+        with st.expander("Technical details · audit persistence"):
+            st.write(build_result.technical_error)
     st.dataframe([{
         "Perspective": item.name.replace("_", " ").title(),
         "Score": f"{item.score}/5",
@@ -2702,9 +2811,11 @@ def explain_idea_page() -> None:
         st.session_state.current_result_explanation = build_idea_explanation(
             st.session_state.purpose, direction, derivation, candidate, specs
         )
-        st.session_state.current_result_audit = build_and_persist_current_audit(
+        audit_build = build_and_persist_current_audit(
             candidate, derivation
         )
+        st.session_state.current_audit_build_result = audit_build
+        st.session_state.current_result_audit = audit_build.audit
         st.session_state.ux_performance["part_3_render_seconds"] = round(
             time.perf_counter() - render_started, 4
         )
@@ -2744,6 +2855,7 @@ def explain_idea_page() -> None:
         "Failure modes remain insufficiently characterized.",
     )
     audit = st.session_state.current_result_audit
+    audit_build = st.session_state.current_audit_build_result
     if audit:
         st.header("Critical review / 批判性审查")
         critique = audit.self_critique
@@ -2756,6 +2868,8 @@ def explain_idea_page() -> None:
             "Most uncertain mapping": critique.get("most_uncertain_mapping"),
             "Fastest invalidation experiment": critique.get("fastest_invalidation_experiment"),
         })
+    elif audit_build and audit_build.status in {"UNAVAILABLE", "FAILED"}:
+        render_audit_unavailable(audit_build)
     st.subheader("What is supported")
     render_bullets(explanation.supported_claims)
     st.subheader("What is inferred")
@@ -2834,7 +2948,10 @@ def research_tools_panel() -> None:
     elif tool == "Structural alignment audit":
         alignment_page()
     elif tool == "Multi-angle result audit":
-        render_result_audit(st.session_state.current_result_audit, full=True)
+        render_result_audit(
+            st.session_state.current_result_audit, full=True,
+            build_result=st.session_state.current_audit_build_result,
+        )
         memory = ResearchMemory(DEFAULT_DB)
         try:
             previous = memory.result_audits(
@@ -2858,24 +2975,59 @@ def research_tools_panel() -> None:
     elif tool == "Research memory":
         memory_page()
     elif tool == "Build information":
-        import platform
-        import subprocess
-        try:
-            commit = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True, text=True, check=False,
-            ).stdout.strip() or "unavailable"
-        except OSError:
-            commit = "unavailable"
+        import importlib.util
+        info = build_information(SETTINGS.gap_engine_mode)
+        capability = load_result_audit_capability(strict=False)
+        st.subheader("Startup capability health")
+        st.dataframe([
+            {"Capability": "Core three-part workflow", "Status": "Available"},
+            {"Capability": "Live paper retrieval", "Status": (
+                "Available" if importlib.util.find_spec("retrieval_service") else "Unavailable"
+            )},
+            {"Capability": "External discovery", "Status": (
+                "Available" if importlib.util.find_spec("external_discovery_pipeline") else "Unavailable"
+            )},
+            {"Capability": "Result explanation", "Status": "Available"},
+            {"Capability": "Multi-angle result audit", "Status": (
+                "Available" if capability.available else "Unavailable"
+            )},
+            {"Capability": "Quality evaluation", "Status": (
+                "Available" if importlib.util.find_spec("evaluation.run_benchmark") else "Unavailable"
+            )},
+            {"Capability": "SPECTER2", "Status": (
+                "Available" if SETTINGS.enable_specter2 else "Disabled"
+            )},
+            {"Capability": "SciBERT classifier", "Status": (
+                "Experimental" if SETTINGS.enable_scibert else "Disabled"
+            )},
+        ], use_container_width=True)
+        st.subheader("Build identity")
         st.write({
-            "Application version": "three-part-ux-v1",
-            "Commit": commit,
-            "Schema version": "run-models-v1",
-            "Pipeline version": PIPELINE_VERSION,
-            "Python": platform.python_version(),
-            "Engine mode": SETTINGS.gap_engine_mode,
+            "Application version": info["application_version"],
+            "Running commit": info["commit_sha"],
+            "Build timestamp": info["build_timestamp"],
+            "Python": info["python_version"],
+            "Pipeline version": info["pipeline_version"],
+            "Run-model schema": info["run_model_schema_version"],
+            "Evaluation schema": info["evaluation_schema_version"],
+            "Engine mode": info["engine_mode"],
             "Measured workflow timings": st.session_state.ux_performance,
         })
+        st.subheader("Source fingerprints")
+        st.dataframe([{
+            "Source": name, "SHA-256": fingerprint,
+            "Short": fingerprint[:8],
+        } for name, fingerprint in info["source_fingerprints"].items()],
+            use_container_width=True)
+        if not capability.available:
+            with st.expander("Audit capability diagnostic"):
+                st.write({
+                    "Error type": capability.error_type,
+                    "Sanitized error": capability.error_message,
+                    "Module path": capability.module_path,
+                    "Expected schema": capability.schema_version,
+                    "Recommended action": "Reboot or redeploy the current main commit.",
+                })
 
 
 def main() -> None:

@@ -50,4 +50,6 @@ def test_result_audits_are_append_only_and_comparable(tmp_path):
     assert {item["payload"]["pipeline_version"] for item in audits} == {
         "pipeline-v1", "pipeline-v2",
     }
+    assert audits[0]["payload"]["audit_id"] in {"audit:one", "audit:two"}
+    assert audits[0]["payload"]["candidate_id"] == "candidate"
     memory.close()

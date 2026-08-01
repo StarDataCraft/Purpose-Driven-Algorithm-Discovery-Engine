@@ -9,7 +9,7 @@ from typing import Iterable
 from uuid import uuid4
 
 from evaluation.audits import audit_alignment, audit_gap, audit_mechanism, candidate_rubric
-from evaluation.schemas import AuditDimension, ResultAudit
+from evaluation.audit_models import AuditDimension, ResultAudit
 from models import AlgorithmCandidate, AlignmentResult, GapSignature, MechanismSignature, Paper, PurposeContract
 from run_models import ResearchRun
 

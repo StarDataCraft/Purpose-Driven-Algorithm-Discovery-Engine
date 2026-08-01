@@ -4,6 +4,14 @@ The primary UI is a self-contained three-part workflow: discover bounded researc
 
 Every displayed final idea receives a typed ten-perspective `ResultAudit`. A score below 4 remains visible and marks the result exploratory. Audits include adversarial-test status and a concise self-critique, are appended to Research Memory without overwriting earlier pipeline versions, and can be inspected under **Research Tools → Multi-angle result audit**. Synthetic fixtures cannot pass human-evidence or prior-art gates. See [`MULTI_ANGLE_AUDIT_REPORT.md`](MULTI_ANGLE_AUDIT_REPORT.md) and [`SOTA_REVIEW.md`](SOTA_REVIEW.md).
 
+Final-result auditing is optional at production startup. Its canonical models
+live in `evaluation/audit_models.py`, and `app.py` loads the implementation only
+when the feature is reached. If a deployment contains an incompatible audit
+module, directions, gap analysis, candidate explanation, diagrams, and the
+experiment remain usable while Technical details show the build commit and
+source fingerprints. The deployment smoke test uses strict mode, so CI still
+fails rather than accepting a broken audit subsystem.
+
 OpenAlex requests use the process-wide client in `openalex_client.py`. An optional key is read only from `OPENALEX_API_KEY` or Streamlit secrets; it is never placed in provenance or UI diagnostics. Without a key, the app uses a conservative anonymous budget. Daily quota exhaustion opens the OpenAlex circuit immediately while arXiv and valid cache results remain usable.
 
 > Calibrated evidence flow: deduplicated candidate papers, automatic relevance,

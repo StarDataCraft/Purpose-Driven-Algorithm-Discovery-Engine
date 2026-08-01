@@ -110,6 +110,8 @@ These do not violate the product boundary but must remain visible:
 | Streamlit structural views | PASS | Coverage, mismatch, contradiction, clusters, model provenance and annotation panels. |
 | Downstream candidate generation | PASS | Existing fixed-seed and AppTest candidate workflows remain green. |
 | Community Cloud deployment | PASS | Lightweight default, core requirements unchanged, enhanced stack separate. |
+| Optional audit startup isolation | PASS | Core app has no eager result-audit or benchmark import; typed graceful mode preserves Parts 1–3, while strict CI validates canonical model identity and audit callables. |
+| Build identity diagnostics | PASS | Running commit and SHA-256 fingerprints for the app and audit contract sources are visible under Build information. |
 
 No checkpoint was trained in this task because the seed dataset is intentionally too
 small for a credible scientific performance claim. The command is implemented for a

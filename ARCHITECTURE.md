@@ -149,3 +149,18 @@ cannot create a strong match; topology, compatible modification slot, evidence,
 and absence of information conflicts are required. Two evaluator corrections
 recognize aggregation/objective modifications and avoid calling an
 unannotated insufficient search a known-solution miss.
+
+### Optional audit import boundary
+
+`evaluation/audit_models.py` is the dependency-neutral canonical home of
+`AuditDimension` and `ResultAudit`; `evaluation/schemas.py` re-exports the same
+class objects for compatibility. `evaluation/capabilities.py` lazily loads
+`evaluation.result_audit` only when auditing is reached. Production returns a
+typed `AuditBuildResult` and preserves the complete three-part result when the
+optional capability or persistence fails. CI and deployment smoke use strict
+loading and fail on any broken audit contract.
+
+`evaluation/__init__.py` exports version constants only. `build_info.py`
+resolves deployment commit identity without requiring `.git` and fingerprints
+the deployed app, schemas, audit models, audit implementation, and capability
+loader so stale or mixed Streamlit builds can be distinguished.

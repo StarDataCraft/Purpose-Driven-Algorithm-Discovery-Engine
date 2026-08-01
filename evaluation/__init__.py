@@ -1,8 +1,7 @@
-"""Benchmark-driven scientific quality evaluation."""
+"""Lightweight evaluation package contract; no subsystem imports."""
 
-from evaluation.benchmark_tasks import BenchmarkTask, load_benchmark_tasks
-from evaluation.schemas import EvaluationReport, HumanReview
+EVALUATION_SCHEMA_VERSION = "4"
+RESULT_AUDIT_VERSION = "1.0"
 
-__all__ = [
-    "BenchmarkTask", "EvaluationReport", "HumanReview", "load_benchmark_tasks",
-]
+
+__all__ = ["EVALUATION_SCHEMA_VERSION", "RESULT_AUDIT_VERSION"]
