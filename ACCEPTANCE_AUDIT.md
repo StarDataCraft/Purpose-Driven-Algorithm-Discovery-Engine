@@ -155,3 +155,15 @@ future adequately sized adjudicated dataset.
 | Human review and persistence | PASS | Optional UI, Research Memory, JSONL/CSV/Markdown exports. |
 | Offline CI/live separation | PASS | Mock adapters in CI; live mode requires reviewed annotations and is not automatic. |
 | No quality overclaim | PASS | Reports and UI warn that synthetic/automated labels are not ground truth. |
+## Part 2 → Part 3 state-transition acceptance
+
+- Candidate and derivation are validated and committed atomically.
+- Candidate buttons use identity-based keys rather than list indexes.
+- Part 3 renders from versioned immutable snapshots and survives cleared
+  candidate and derivation portfolios.
+- Ordinary reruns and backward navigation preserve the selected idea.
+- A direction or gap change invalidates the old selection; same-direction reuse
+  preserves it.
+- The deployment smoke test completes Part 1 → Part 2 → first Part 3 result,
+  returns to Part 2, and verifies a second clicked candidate in Part 3.
+- Optional audit or persistence failure cannot erase the core explanation.

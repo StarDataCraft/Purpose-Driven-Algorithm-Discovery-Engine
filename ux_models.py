@@ -3,17 +3,116 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from hashlib import sha1
+from hashlib import sha1, sha256
+import json
 from typing import Any
 
 from gap_consolidation import CanonicalGapFamily
 from models import (
-    AlgorithmCandidate, AlignmentResult, GapSignature, MechanismSignature,
-    Paper, PurposeContract,
+    AlgorithmCandidate, AlignmentResult, ExperimentPlan, GapSignature,
+    MechanismSignature, Paper, PurposeContract, ScoreCard,
 )
 
 
 PIPELINE_VERSION = "three-part-ux-v1"
+SELECTED_IDEA_SCHEMA_VERSION = "selected-idea-context-v1"
+
+
+def _canonical_fingerprint(snapshot: dict[str, Any]) -> str:
+    payload = json.dumps(
+        snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class SelectedIdeaContext:
+    """Complete, self-consistent hand-off from Part 2 to Part 3."""
+
+    selection_id: str
+    selected_at_utc: str
+    parent_run_id: str
+    direction_id: str
+    gap_id: str
+    gap_family_id: str
+    candidate_id: str
+    derivation_id: str
+    candidate_snapshot: dict[str, Any]
+    derivation_snapshot: dict[str, Any]
+    direction_snapshot: dict[str, Any]
+    gap_snapshot: dict[str, Any]
+    pipeline_version: str
+    schema_version: str
+    candidate_fingerprint: str
+    derivation_fingerprint: str
+    resolution_source: str = "immutable snapshot"
+    validation_status: str = "COMPLETE"
+    validation_notes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "SelectedIdeaContext":
+        values = dict(payload)
+        values["validation_notes"] = tuple(values.get("validation_notes", ()))
+        return cls(**values)
+
+
+def candidate_to_dict(candidate: AlgorithmCandidate) -> dict[str, Any]:
+    return asdict(candidate)
+
+
+def candidate_from_dict(payload: dict[str, Any]) -> AlgorithmCandidate:
+    values = dict(payload)
+    values["minimal_experiment"] = ExperimentPlan(**values["minimal_experiment"])
+    values["scores"] = ScoreCard(**values["scores"])
+    return AlgorithmCandidate(**values)
+
+
+def derivation_to_dict(derivation: "IdeaDerivation") -> dict[str, Any]:
+    return asdict(derivation)
+
+
+def derivation_from_dict(payload: dict[str, Any]) -> "IdeaDerivation":
+    values = dict(payload)
+    for key in (
+        "structural_correspondences", "analogy_boundaries", "selected_operators",
+        "known_method_neighbors", "uncertainties",
+    ):
+        values[key] = tuple(values.get(key, ()))
+    return IdeaDerivation(**values)
+
+
+def direction_to_dict(direction: "DirectionSummary") -> dict[str, Any]:
+    return asdict(direction)
+
+
+def direction_from_dict(payload: dict[str, Any]) -> "DirectionSummary":
+    values = dict(payload)
+    for key in (
+        "gap_family_ids", "gap_types", "evidence_paper_ids",
+        "current_solution_families", "secondary_metrics", "uncertainties",
+    ):
+        values[key] = tuple(values.get(key, ()))
+    return DirectionSummary(**values)
+
+
+def gap_to_dict(gap: GapSignature) -> dict[str, Any]:
+    return asdict(gap)
+
+
+def gap_from_dict(payload: dict[str, Any]) -> GapSignature:
+    return GapSignature(**dict(payload))
+
+
+def selected_idea_fingerprints(
+    candidate_snapshot: dict[str, Any], derivation_snapshot: dict[str, Any],
+) -> tuple[str, str]:
+    return (
+        _canonical_fingerprint(candidate_snapshot),
+        _canonical_fingerprint(derivation_snapshot),
+    )
 
 
 def candidate_modification(candidate: AlgorithmCandidate) -> str:

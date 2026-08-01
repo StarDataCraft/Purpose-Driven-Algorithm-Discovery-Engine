@@ -55,8 +55,11 @@ from evaluation.capabilities import (
 from run_models import utc_now
 from result_explanation import research_result
 from ux_models import (
-    PIPELINE_VERSION, build_direction_portfolio, build_idea_derivation,
-    build_idea_explanation, candidate_modification,
+    PIPELINE_VERSION, SELECTED_IDEA_SCHEMA_VERSION, SelectedIdeaContext,
+    build_direction_portfolio, build_idea_derivation, build_idea_explanation,
+    candidate_from_dict, candidate_modification, candidate_to_dict,
+    derivation_from_dict, derivation_to_dict, direction_from_dict,
+    direction_to_dict, gap_from_dict, gap_to_dict, selected_idea_fingerprints,
 )
 from diagram_builders import (
     before_after_spec, evidence_to_idea_spec, experiment_spec,
@@ -234,6 +237,11 @@ def initialize_state() -> None:
         "selected_gap_family_id": "",
         "current_idea_portfolio": [],
         "selected_idea_id": "",
+        "selected_candidate_snapshot": None,
+        "selected_derivation_snapshot": None,
+        "selected_idea_context": None,
+        "selected_idea_selection_error": "",
+        "selected_idea_selection_version": SELECTED_IDEA_SCHEMA_VERSION,
         "current_result_explanation": None,
         "current_result_audit": None,
         "current_audit_build_result": None,
@@ -350,6 +358,11 @@ def invalidate_downstream_for_purpose() -> None:
         "current_direction_portfolio": [], "selected_direction_id": "",
         "selected_direction_snapshot": None, "selected_gap_family_id": "",
         "current_idea_portfolio": [], "selected_idea_id": "",
+        "selected_candidate_snapshot": None,
+        "selected_derivation_snapshot": None,
+        "selected_idea_context": None,
+        "selected_idea_selection_error": "",
+        "selected_idea_selection_version": SELECTED_IDEA_SCHEMA_VERSION,
         "current_result_explanation": None, "current_diagram_specs": [],
         "current_result_audit": None,
         "current_audit_build_result": None,
@@ -369,6 +382,10 @@ def invalidate_downstream_for_gap() -> None:
     st.session_state.current_external_result = None
     st.session_state.current_idea_portfolio = []
     st.session_state.selected_idea_id = ""
+    st.session_state.selected_candidate_snapshot = None
+    st.session_state.selected_derivation_snapshot = None
+    st.session_state.selected_idea_context = None
+    st.session_state.selected_idea_selection_error = ""
     st.session_state.current_result_explanation = None
     st.session_state.current_result_audit = None
     st.session_state.current_audit_build_result = None
@@ -2030,14 +2047,169 @@ def select_direction(direction_id: str) -> None:
     st.session_state.active_primary_step = PRIMARY_STEPS[1]
 
 
-def select_idea(candidate_id: str) -> None:
-    st.session_state.selected_idea_id = candidate_id
-    st.session_state.current_result_explanation = None
-    st.session_state.current_result_audit = None
-    st.session_state.current_audit_build_result = None
-    st.session_state.current_diagram_specs = []
-    st.session_state["_primary_step"] = PRIMARY_STEPS[2]
-    st.session_state.active_primary_step = PRIMARY_STEPS[2]
+def _selection_context(
+    *, candidate: object, derivation: object, direction: object, gap: object,
+    run: ResearchRun, active_direction_id: str, active_gap_id: str,
+    resolution_source: str = "immutable snapshot",
+) -> SelectedIdeaContext:
+    """Validate and construct a selection without mutating session state."""
+    errors = []
+    partial = []
+    if candidate.candidate_id != derivation.candidate_id:
+        errors.append("candidate and derivation IDs differ")
+    if derivation.parent_run_id != run.run_id:
+        errors.append("derivation belongs to another research run")
+    if candidate.research_run_id:
+        if candidate.research_run_id != run.run_id:
+            errors.append("candidate belongs to another research run")
+    else:
+        partial.append("legacy candidate has no research_run_id")
+    if derivation.direction_id != direction.direction_id:
+        errors.append("derivation belongs to another direction")
+    if direction.direction_id != active_direction_id:
+        errors.append("selected direction snapshot does not match session state")
+    if gap.gap_id != active_gap_id:
+        errors.append("selected gap does not match session state")
+    candidate_gap_id = candidate.selected_gap_snapshot.get("gap_id", "")
+    if candidate_gap_id:
+        if candidate_gap_id != gap.gap_id:
+            errors.append("candidate gap snapshot belongs to another gap")
+    else:
+        partial.append("legacy candidate has no selected gap ID")
+    if errors:
+        raise ValueError("; ".join(errors))
+    candidate_snapshot = candidate_to_dict(candidate)
+    derivation_snapshot = derivation_to_dict(derivation)
+    candidate_fingerprint, derivation_fingerprint = selected_idea_fingerprints(
+        candidate_snapshot, derivation_snapshot,
+    )
+    return SelectedIdeaContext(
+        selection_id=f"selection:{uuid4().hex}", selected_at_utc=utc_now(),
+        parent_run_id=run.run_id, direction_id=direction.direction_id,
+        gap_id=gap.gap_id, gap_family_id=derivation.gap_family_id,
+        candidate_id=candidate.candidate_id,
+        derivation_id=derivation.derivation_id,
+        candidate_snapshot=candidate_snapshot,
+        derivation_snapshot=derivation_snapshot,
+        direction_snapshot=direction_to_dict(direction), gap_snapshot=gap_to_dict(gap),
+        pipeline_version=derivation.pipeline_version,
+        schema_version=SELECTED_IDEA_SCHEMA_VERSION,
+        candidate_fingerprint=candidate_fingerprint,
+        derivation_fingerprint=derivation_fingerprint,
+        resolution_source=resolution_source,
+        validation_status="LEGACY_CONTEXT" if partial else "COMPLETE",
+        validation_notes=tuple(partial),
+    )
+
+
+def commit_idea_selection(
+    *, candidate: object, derivation: object, direction: object, gap: object,
+    run: ResearchRun, state: object | None = None,
+) -> SelectedIdeaContext:
+    """Atomically commit a complete Part 2 → Part 3 selection."""
+    target = st.session_state if state is None else state
+    context = _selection_context(
+        candidate=candidate, derivation=derivation, direction=direction,
+        gap=gap, run=run,
+        active_direction_id=target["selected_direction_id"],
+        active_gap_id=target["selected_gap_id"],
+    )
+    target.update({
+        "selected_idea_id": context.candidate_id,
+        "selected_candidate_snapshot": context.candidate_snapshot,
+        "selected_derivation_snapshot": context.derivation_snapshot,
+        "selected_idea_context": context,
+        "selected_idea_selection_error": "",
+        "selected_idea_selection_version": context.schema_version,
+        "current_result_explanation": None,
+        "current_result_audit": None,
+        "current_audit_build_result": None,
+        "current_diagram_specs": [],
+        "_primary_step": PRIMARY_STEPS[2],
+        "active_primary_step": PRIMARY_STEPS[2],
+    })
+    try:
+        if state is not None:
+            return context
+        memory = ResearchMemory(DEFAULT_DB)
+        try:
+            memory.save_structural(
+                "selected_idea_context", context.selection_id, context,
+                model_version=context.pipeline_version,
+            )
+        finally:
+            memory.close()
+    except Exception:
+        pass  # Session state is authoritative; persistence is best effort.
+    return context
+
+
+def handle_idea_selection(**selection: object) -> None:
+    """Streamlit callback: commit before sidebar widgets are instantiated."""
+    try:
+        commit_idea_selection(**selection)
+    except (KeyError, TypeError, ValueError) as exc:
+        st.session_state.selected_idea_selection_error = str(exc)
+
+
+def validate_selected_idea_state() -> str:
+    """Classify selection integrity before Part 3 resolves its snapshots."""
+    raw = st.session_state.selected_idea_context
+    if raw is None:
+        return "RECOVERABLE" if st.session_state.selected_idea_id else "NOT_SELECTED"
+    try:
+        context = (
+            SelectedIdeaContext.from_dict(raw) if isinstance(raw, dict) else raw
+        )
+        candidate = candidate_from_dict(context.candidate_snapshot)
+        derivation = derivation_from_dict(context.derivation_snapshot)
+    except Exception:
+        return "SNAPSHOT_INVALID"
+    run = st.session_state.current_research_run
+    if not run or context.parent_run_id != run.run_id:
+        return "RUN_MISMATCH"
+    if context.direction_id != st.session_state.selected_direction_id:
+        return "DIRECTION_MISMATCH"
+    if context.gap_id != st.session_state.selected_gap_id:
+        return "GAP_MISMATCH"
+    if candidate.candidate_id != derivation.candidate_id:
+        return "CANDIDATE_DERIVATION_MISMATCH"
+    return context.validation_status
+
+
+def resolve_selected_idea() -> tuple[object, object, object, object, SelectedIdeaContext] | None:
+    """Resolve immutable snapshots first, then upgrade a legacy ID-only state."""
+    raw = st.session_state.selected_idea_context
+    if raw is not None:
+        context = SelectedIdeaContext.from_dict(raw) if isinstance(raw, dict) else raw
+        return (
+            candidate_from_dict(context.candidate_snapshot),
+            derivation_from_dict(context.derivation_snapshot),
+            direction_from_dict(context.direction_snapshot),
+            gap_from_dict(context.gap_snapshot), context,
+        )
+    candidate = next((item for item in st.session_state.candidate_portfolio
+                      if item.candidate_id == st.session_state.selected_idea_id), None)
+    derivation = next((item for item in st.session_state.current_idea_portfolio
+                       if item.candidate_id == st.session_state.selected_idea_id), None)
+    if not candidate or not derivation:
+        return None
+    context = _selection_context(
+        candidate=candidate, derivation=derivation,
+        direction=st.session_state.selected_direction_snapshot,
+        gap=st.session_state.selected_gap,
+        run=st.session_state.current_research_run,
+        active_direction_id=st.session_state.selected_direction_id,
+        active_gap_id=st.session_state.selected_gap_id,
+        resolution_source="session portfolio recovery",
+    )
+    st.session_state.update({
+        "selected_candidate_snapshot": context.candidate_snapshot,
+        "selected_derivation_snapshot": context.derivation_snapshot,
+        "selected_idea_context": context,
+        "selected_idea_selection_version": context.schema_version,
+    })
+    return candidate, derivation, st.session_state.selected_direction_snapshot, st.session_state.selected_gap, context
 
 
 def set_external_live_retry() -> None:
@@ -2567,6 +2739,13 @@ def analyze_gap_page() -> None:
             "Analogy boundary": "Structural correspondence only; literal equivalence is not assumed.",
         })
     st.header("Candidate idea portfolio / 候选想法")
+    if st.session_state.selected_idea_selection_error:
+        st.error(
+            "The selected candidate no longer matches its derivation. "
+            "Return to Part 2 and select the idea again."
+        )
+        with st.expander("Technical details · selection error"):
+            st.write(st.session_state.selected_idea_selection_error)
     candidates = {
         item.candidate_id: item for item in st.session_state.candidate_portfolio
     }
@@ -2592,8 +2771,13 @@ def analyze_gap_page() -> None:
             })
             st.button(
                 "Explain this idea / 解释这个想法",
-                key=f"_select_idea_{index}", type="primary",
-                on_click=select_idea, args=(candidate.candidate_id,),
+                key=f"select_idea::{candidate.candidate_id}", type="primary",
+                on_click=handle_idea_selection,
+                kwargs={
+                    "candidate": candidate, "derivation": derivation,
+                    "direction": direction, "gap": gap,
+                    "run": st.session_state.current_research_run,
+                },
             )
 
 
@@ -2775,28 +2959,56 @@ def render_result_audit(
 
 def explain_idea_page() -> None:
     st.title("Explain the idea / 解释新想法")
-    candidate = next((
-        item for item in st.session_state.candidate_portfolio
-        if item.candidate_id == st.session_state.selected_idea_id
-    ), None)
-    derivation = next((
-        item for item in st.session_state.current_idea_portfolio
-        if item.candidate_id == st.session_state.selected_idea_id
-    ), None)
-    if not candidate or not derivation:
-        st.info("Select an idea in Part 2.")
+    status = validate_selected_idea_state()
+    try:
+        resolved = resolve_selected_idea() if status in {
+            "COMPLETE", "LEGACY_CONTEXT", "RECOVERABLE",
+        } else None
+    except (KeyError, TypeError, ValueError):
+        status = "SNAPSHOT_INVALID"
+        resolved = None
+    if not resolved:
+        if status == "NOT_SELECTED":
+            st.info("Select an idea in Part 2.")
+        elif status == "CANDIDATE_DERIVATION_MISMATCH":
+            st.error(
+                "The selected candidate no longer matches its derivation. "
+                "Return to Part 2 and select the idea again."
+            )
+        elif status == "DIRECTION_MISMATCH":
+            st.error(
+                "The previous idea belongs to a different research direction "
+                "and was cleared."
+            )
+        else:
+            st.error(
+                "The selected idea could not be restored after the page transition."
+            )
+            st.button(
+                "Restore selected idea", key="restore_selected_idea",
+                on_click=navigate_to, args=(PRIMARY_STEPS[1],),
+            )
+        with st.expander("Technical details · selected idea state"):
+            render_fields({
+                "Status": status,
+                "Selected idea ID": st.session_state.selected_idea_id or "not set",
+                "Selection error": st.session_state.selected_idea_selection_error or "none",
+                "Run ID": getattr(st.session_state.current_research_run, "run_id", "not set"),
+                "Direction ID": st.session_state.selected_direction_id or "not set",
+                "Gap ID": st.session_state.selected_gap_id or "not set",
+            })
         st.button(
             "Back to gap analysis / 返回 Gap 分析",
             on_click=navigate_to, args=(PRIMARY_STEPS[1],),
         )
         return
+    candidate, derivation, direction, gap, selection_context = resolved
     st.button(
         "Back to gap analysis / 返回 Gap 分析",
         on_click=navigate_to, args=(PRIMARY_STEPS[1],),
     )
     if st.session_state.current_result_explanation is None:
         render_started = time.perf_counter()
-        direction = st.session_state.selected_direction_snapshot
         diagram_started = time.perf_counter()
         specs = [
             evidence_to_idea_spec(direction, derivation),
@@ -2905,7 +3117,7 @@ def explain_idea_page() -> None:
         "Kill criterion": candidate.kill_criterion or experiment.get("failure_rule"),
     })
     st.header("Supporting papers / 支持论文")
-    render_related_papers(st.session_state.selected_direction_snapshot)
+    render_related_papers(direction)
     markdown = explanation_markdown(explanation)
     st.download_button(
         "Export research idea as Markdown", markdown,
@@ -2928,6 +3140,22 @@ def explain_idea_page() -> None:
     )
     with st.expander("Technical details · Raw JSON"):
         st.json(asdict(explanation))
+    with st.expander("Technical details · Selected idea state"):
+        render_fields({
+            "Selected idea ID": selection_context.candidate_id,
+            "Candidate ID": selection_context.candidate_id,
+            "Derivation ID": selection_context.derivation_id,
+            "Parent run ID": selection_context.parent_run_id,
+            "Direction ID": selection_context.direction_id,
+            "Gap ID": selection_context.gap_id,
+            "Selection timestamp": selection_context.selected_at_utc,
+            "Selection schema": selection_context.schema_version,
+            "Pipeline version": selection_context.pipeline_version,
+            "Candidate fingerprint": selection_context.candidate_fingerprint,
+            "Derivation fingerprint": selection_context.derivation_fingerprint,
+            "Resolution source": selection_context.resolution_source,
+            "Validation status": validate_selected_idea_state(),
+        })
 
 
 def research_tools_panel() -> None:

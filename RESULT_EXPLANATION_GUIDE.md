@@ -22,3 +22,11 @@ The primary presentation is now Part 3, **Explain the idea / 解释新想法**. 
 adds deterministic evidence-flow, mechanism-transfer, before/after, and
 experiment diagrams. Simplifying the presentation does not increase scientific
 confidence.
+## Restoring the selected idea
+
+The explanation page uses the immutable selected-idea snapshot, so ordinary
+reruns, backward navigation, and loss of the mutable candidate/derivation lists
+do not change the idea being explained. Technical details show the exact IDs,
+selection timestamp, schema and pipeline versions, fingerprints, resolution
+source, and validation status. A legacy ID-only session is recovered from its
+portfolio only once and then converted to the canonical snapshot format.

@@ -69,6 +69,36 @@ def main() -> None:
     assert all(
         value != "missing" for value in info["source_fingerprints"].values()
     )
+    at.sidebar.selectbox(key="_research_tool").set_value("None")
+    at.run(timeout=30)
+    at.radio(key="_purpose_search_mode").set_value(
+        "Offline demonstration fixtures"
+    )
+    at.button[0].click().run(timeout=30)
+    assert at.session_state["current_direction_portfolio"]
+    at.button(key="_select_direction_0").click().run(timeout=30)
+    assert at.session_state["selected_direction_id"]
+    at.button(key="_derive_ideas").click().run(timeout=30)
+    assert len(at.session_state["current_idea_portfolio"]) >= 2
+    first_id = at.session_state["current_idea_portfolio"][0].candidate_id
+    at.button(key=f"select_idea::{first_id}").click().run(timeout=30)
+    context = at.session_state["selected_idea_context"]
+    assert context and context.candidate_id == first_id
+    assert context.candidate_snapshot["candidate_id"] == first_id
+    assert context.derivation_snapshot["candidate_id"] == first_id
+    assert at.session_state["current_result_explanation"].candidate_id == first_id
+    assert not any("Select an idea in Part 2." in item.value for item in at.info)
+    assert not at.exception
+
+    part_2 = "2 · Analyze the gap / 分析 Gap"
+    at.radio(key="_primary_step").set_value(part_2).run(timeout=30)
+    assert at.session_state["current_idea_portfolio"]
+    second_id = at.session_state["current_idea_portfolio"][1].candidate_id
+    at.button(key=f"select_idea::{second_id}").click().run(timeout=30)
+    assert at.session_state["selected_idea_context"].candidate_id == second_id
+    assert at.session_state["current_result_explanation"].candidate_id == second_id
+    assert first_id != second_id
+    assert not at.exception
     print("deployment smoke test: OK")
 
 

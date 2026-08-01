@@ -65,3 +65,17 @@ Part 3 exports readable Markdown, structured JSON, DOT diagrams, and experiment
 Markdown. Automatic relevance remains separate from human review; paper claims
 remain separate from inference; novelty and expected improvement remain
 unverified until external evaluation.
+## Atomic Part 2 → Part 3 selection
+
+Each `Explain this idea` button has the stable key
+`select_idea::<candidate_id>`. Its Streamlit callback validates and commits the
+candidate, derivation, direction, gap, and parent run as one immutable
+`SelectedIdeaContext` before the sidebar widget is instantiated. Streamlit's
+single automatic callback rerun then opens Part 3.
+
+Part 3 reconstructs its inputs from the context snapshots first. Mutable Part 2
+portfolios are used only to recover an older ID-only session, and successful
+recovery is immediately upgraded to a context. Back navigation retains the
+portfolio and context. A purpose, run, direction, or gap change invalidates the
+context; selecting another idea in the same portfolio replaces only Part 3
+products.

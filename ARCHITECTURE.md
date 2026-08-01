@@ -164,3 +164,16 @@ loading and fail on any broken audit contract.
 resolves deployment commit identity without requiring `.git` and fingerprints
 the deployed app, schemas, audit models, audit implementation, and capability
 loader so stale or mixed Streamlit builds can be distinguished.
+## Selected-idea state boundary
+
+`ux_models.SelectedIdeaContext` is the canonical Part 3 input. It contains
+versioned snapshots and deterministic SHA-256 fingerprints for the candidate
+and derivation, plus direction, gap, run, selection timestamp, and validation
+provenance. Selection construction validates identity locally before any state
+write; the commit then publishes all selection keys and clears only explanation,
+diagram, and optional-audit outputs.
+
+Part 3 resolves immutable snapshots before any session portfolio lookup. Legacy
+ID-only sessions can recover from both portfolios and are upgraded immediately.
+Optional audit persistence and diagram rendering are downstream capabilities;
+their failure does not invalidate the selected context.
