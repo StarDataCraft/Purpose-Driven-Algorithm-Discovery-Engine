@@ -78,3 +78,30 @@ def test_candidate_change_uses_the_delta_for_its_actual_slot():
     assert candidate_modification(candidate) == (
         "weights follow bounded feedback"
     )
+
+
+def test_diagram_renderer_falls_back_when_graphviz_fails(monkeypatch):
+    import app
+
+    rendered = []
+    monkeypatch.setattr(
+        app.st, "graphviz_chart",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("renderer")),
+    )
+    monkeypatch.setattr(app.st, "subheader", lambda value: rendered.append(value))
+    monkeypatch.setattr(app.st, "warning", lambda value: rendered.append(value))
+    monkeypatch.setattr(app.st, "write", lambda value: rendered.append(value))
+
+    class Expander:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(app.st, "expander", lambda *args, **kwargs: Expander())
+    app.render_diagram({
+        "title": "Test diagram", "dot": "digraph G {}",
+        "fallback": "paper → gap → idea",
+    })
+    assert rendered.count("paper → gap → idea") == 2
+    assert any("Diagram unavailable" in str(value) for value in rendered)

@@ -51,6 +51,10 @@ OPERATORS = [
         ["convergence signal", "budget"], ["stopping state"], "stop if gain < ε or cost > B", ["early stopping"]),
     _op("missing_feature_routing", "missing-feature routing", ["routing", "feature_acquisition"],
         ["feature availability mask"], ["availability state"], "route by observed feature subset", ["missingness-aware experts"]),
+    _op("bounded_model_selection", "bounded model selection", ["model_selection"],
+        ["prediction residual", "regime similarity"], ["candidate model scores"],
+        "m* = argmin_m recent_loss(m) subject to a bounded verification window",
+        ["online model selection", "adaptive kernel selection"]),
 ]
 OPERATOR_BY_ID = {operator.operator_id: operator for operator in OPERATORS}
 

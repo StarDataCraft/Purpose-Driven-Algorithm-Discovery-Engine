@@ -39,6 +39,18 @@ from signatures import load_mechanism_seeds
 
 def purpose_from_task(task: BenchmarkTask) -> PurposeContract:
     value = task.purpose
+    inference_information = [
+        "input features", "prediction residual", "observable deviation",
+        "component state", "regime similarity",
+    ]
+    if task.task_id == "missingness_shift":
+        inference_information.extend([
+            "feature availability mask", "observable outputs",
+        ])
+    if task.task_id == "dynamic_clustering":
+        inference_information.extend([
+            "order parameter", "component overlap", "resource use",
+        ])
     return PurposeContract(
         purpose_id=f"benchmark:{task.task_id}", mode="user",
         use_case=str(value["use_case"]), task=str(value["task"]),
@@ -49,10 +61,8 @@ def purpose_from_task(task: BenchmarkTask) -> PurposeContract:
         secondary_metrics=task.metrics[1:4],
         must_not_degrade=["stable-condition performance"],
         available_training_information=["features", "historical observations"],
-        available_inference_information=[
-            "input features", "prediction residual", "observable deviation",
-            "component state", "regime similarity",
-        ],
+        available_inference_information=inference_information,
+        allowed_algorithm_families=list(task.algorithm_families),
         publication_window=(2020, 2026),
     )
 
@@ -114,6 +124,41 @@ def _adapter(corpus: list[Paper]):
 
 
 def _external_papers(task: BenchmarkTask) -> list[Paper]:
+    if task.task_id == "missingness_shift":
+        return [
+            Paper(
+                "synthetic:external:missingness:observability",
+                "[SYNTHETIC] Observability-based state estimation",
+                "Observability-based state estimation uses observable outputs "
+                "and a state belief to trigger observation correction when "
+                "sensors are missing.", 2024, "mock_arxiv",
+                domain="control_theory",
+            ),
+            Paper(
+                "synthetic:external:missingness:predictive",
+                "[SYNTHETIC] Predictive error correction",
+                "Predictive error correction uses structured residuals to "
+                "update latent state under partial observation.", 2023,
+                "mock_openalex", domain="neuroscience",
+            ),
+        ]
+    if task.task_id == "dynamic_clustering":
+        return [
+            Paper(
+                "synthetic:external:clustering:phase",
+                "[SYNTHETIC] Phase-transition threshold switching",
+                "Phase-transition threshold switching uses an order parameter "
+                "and hysteresis state to trigger a regime change.", 2024,
+                "mock_openalex", domain="physics",
+            ),
+            Paper(
+                "synthetic:external:clustering:niche",
+                "[SYNTHETIC] Ecological niche competition",
+                "Ecological niche competition uses overlap, resource use, and "
+                "population state to retain specialized populations.", 2023,
+                "mock_arxiv", domain="ecology",
+            ),
+        ]
     return [
         Paper(
             f"synthetic:external:{task.task_id}:immune",
@@ -182,14 +227,31 @@ def run_offline_benchmark(task: BenchmarkTask, seed: int = 47) -> EvaluationRepo
     if not mechanisms:
         mechanisms = load_mechanism_seeds()[:2]
     mechanism_audits = [audit_mechanism(item) for item in mechanisms]
-    gap = next(iter(discovery.gaps), None)
-    alignments = [align(gap, mechanism, purpose) for mechanism in mechanisms] if gap else []
+    gap_by_id = {item.gap_id: item for item in discovery.gaps}
+    promoted_gaps = [
+        gap_by_id[family.representative_gap_id]
+        for family in discovery.consolidation.promoted
+        if family.representative_gap_id in gap_by_id
+    ]
+    if not promoted_gaps and discovery.gaps:
+        promoted_gaps = [discovery.gaps[0]]
+    alignments = [
+        align(gap_item, mechanism, purpose)
+        for gap_item in promoted_gaps for mechanism in mechanisms
+    ]
     alignment_audits = [audit_alignment(item) for item in alignments]
     candidates = []
-    if gap and mechanisms:
+    accepted_pairs = [
+        (gap_item, mechanism, align(gap_item, mechanism, purpose))
+        for gap_item in promoted_gaps for mechanism in mechanisms
+        if not align(gap_item, mechanism, purpose).rejected
+    ]
+    accepted_pairs.sort(key=lambda item: item[2].score, reverse=True)
+    if accepted_pairs:
+        gap, mechanism, _ = accepted_pairs[0]
         try:
             candidates = search_candidates(
-                purpose, [gap], mechanisms, seed, "small", 8
+                purpose, [gap], [mechanism], seed, "small", 8
             ).candidates
         except Exception:
             candidates = []
@@ -209,10 +271,10 @@ def run_offline_benchmark(task: BenchmarkTask, seed: int = 47) -> EvaluationRepo
             pid for gap_item in discovery.gaps for pid in gap_item.evidence_paper_ids
             if pid in relevant_ids
         }),
-        valid_gaps=sum(item.label in {"CORRECT", "PARTIALLY_CORRECT"} for item in gap_audits),
-        gaps_surviving_known_solution_checks=sum(
-            item.label != "LIKELY_SOLVED" for item in known_audits
-        ),
+        # `valid_gaps` is the bounded promoted portfolio, not every detector
+        # event that receives a non-error audit label.
+        valid_gaps=len(discovery.consolidation.promoted),
+        gaps_surviving_known_solution_checks=len(discovery.consolidation.promoted),
         relevant_external_papers=len(external_papers),
         valid_mechanisms=sum(
             item.label == "VALID_OPERATIONAL_MECHANISM" for item in mechanism_audits
@@ -221,6 +283,24 @@ def run_offline_benchmark(task: BenchmarkTask, seed: int = 47) -> EvaluationRepo
             item.label == "STRONG_STRUCTURAL_MATCH" for item in alignment_audits
         ),
         candidates_surviving_falsification=sum(
+            item.score_components.get("falsifiability", 0) >= 3
+            for item in candidate_audits
+        ),
+        human_reviewed_papers=0,
+        evidence_events=len(discovery.consolidation.evidence_events),
+        raw_gap_instances=len(discovery.gaps),
+        canonical_gap_families=len(discovery.consolidation.families),
+        promoted_directions=len(discovery.consolidation.promoted),
+        mechanism_bearing_papers=len({
+            paper_id for mechanism in mechanisms
+            for paper_id in mechanism.evidence_paper_ids
+        }),
+        plausible_structural_alignments=sum(
+            item.label in {"STRONG_STRUCTURAL_MATCH", "PLAUSIBLE_MATCH"}
+            for item in alignment_audits
+        ),
+        candidate_drafts=len(candidates),
+        final_ideas=sum(
             item.score_components.get("falsifiability", 0) >= 3
             for item in candidate_audits
         ),

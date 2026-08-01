@@ -23,6 +23,7 @@ def candidate_modification(candidate: AlgorithmCandidate) -> str:
         "update_rule": candidate.update_rule_delta,
         "feedback_control": candidate.update_rule_delta,
         "state_estimation": candidate.update_rule_delta,
+        "model_selection": candidate.update_rule_delta,
         "initialization": candidate.initialization_delta,
         "memory": candidate.memory_delta,
         "routing": candidate.routing_delta,

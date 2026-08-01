@@ -7,7 +7,8 @@ import pytest
 import requests
 
 from openalex_client import (
-    OpenAlexClient, OpenAlexRequestError, default_query_budget, redact_url,
+    OpenAlexClient, OpenAlexRequestError, default_query_budget,
+    load_openalex_api_key, redact_url,
 )
 from retrieval_service import retrieve_corpus
 
@@ -101,6 +102,18 @@ def test_anonymous_budget_is_conservative_and_stage_scoped():
     assert budget.stage_limits["broad_ml_retrieval"] == 5
     assert budget.stage_limits["external_retrieval"] == 3
     assert budget.stage_limits["citation_support"] == 0
+
+
+def test_runtime_key_is_loaded_from_environment_without_serialization(monkeypatch):
+    monkeypatch.setenv("OPENALEX_API_KEY", "runtime-only-test-key")
+    assert load_openalex_api_key() == "runtime-only-test-key"
+    value, _ = client([Response(200)], api_key=load_openalex_api_key())
+    budget = value.begin_run(default_query_budget("API_KEY"))
+    value.get_works(
+        {"search": "drift"}, timeout=1, budget=budget,
+        stage="broad_ml_retrieval",
+    )
+    assert "runtime-only-test-key" not in str(value.state.safe_dict())
 
 
 def test_retrieval_stops_openalex_after_daily_limit_but_arxiv_continues(

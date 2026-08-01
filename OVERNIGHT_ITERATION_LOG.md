@@ -24,6 +24,54 @@
 - Remaining issue: benchmark the three scientific purposes and inspect two distinct direction paths.
 - Next decision: run deterministic recurring-drift evaluation and inspect its full result.
 
+## Extended cycle 3 — honest gap-funnel accounting (2026-08-01)
+
+- Problem: recurring drift reported 34 “valid gaps” from four evidence-bearing papers, obscuring the bounded production portfolio.
+- Root cause: the benchmark funnel counted every non-error detector instance as a valid gap instead of reporting evidence events, raw instances, canonical families, and promoted directions separately.
+- Repair: expanded the typed funnel and defined valid gaps as promoted canonical directions.
+- Tests: evaluation schema and all three deterministic benchmark reports were regenerated outside the repository.
+- Actual output inspected: recurring drift now reports 50 evidence events → 36 raw instances → 3 canonical families → 3 promoted directions, with 1 strong alignment and 3 final ideas.
+- Score before: 4, 3, 2, 2, 4, 3, 4, 5.
+- Score after: 5, 4, 5, 5, 4, 5, 4, 5.
+- Remaining issue: missingness had no promoted direction because a valid family-level binding was discarded.
+- Next decision: preserve explicit family constraints without claiming exact method evidence.
+
+## Extended cycle 4 — family-level missingness binding (2026-08-01)
+
+- Problem: the missingness benchmark had 18 raw gaps and 2 canonical families but zero promoted directions.
+- Root cause: the compact algorithm library lacked the selected generic `tree ensemble` family, and extraction converted it to `unspecified`.
+- Repair: preserve a user-selected generic family and infer only a failure-compatible modification slot; benchmark purposes now carry their declared allowed families.
+- Tests: generic family/slot regression and evaluation harness passed.
+- Actual output inspected: missingness changed from 0 to 2 promoted directions; it still correctly withheld candidates while no strong mechanism alignment existed.
+- Score before: 2, 2, 4, 4, 4, 5, 2, 5.
+- Score after: 4, 4, 4, 5, 4, 5, 4, 5.
+- Remaining issue: the benchmark supplied immune/control evidence regardless of task and lacked a runnable family skeleton.
+- Next decision: correct the benchmark evidence, not the alignment threshold.
+
+## Extended cycle 5 — missingness mechanism validity (2026-08-01)
+
+- Problem: missingness had no strong alignment or candidate even after direction binding.
+- Root cause: external fixtures were unrelated to missing-feature observation, and no tree-ensemble skeleton owned the documented failure.
+- Repair: added task-appropriate observability/predictive-correction fixtures, inference-available signals, and a missingness-aware tree-ensemble skeleton with feature-acquisition/routing slots.
+- Tests: algorithm library, extraction, evaluation, and candidate audits passed.
+- Actual output inspected: missingness now reports 2 promoted directions, 2 operational mechanisms, 1 strong alignment, 2 candidate drafts, and 2 falsifiable ideas.
+- Score before: 4, 3, 4, 4, 4, 5, 3, 5.
+- Score after: 5, 5, 4, 5, 4, 5, 5, 5.
+- Remaining issue: dynamic clustering evaluated only the first promoted direction and missed a lifecycle-compatible path.
+- Next decision: evaluate the full promoted portfolio without weakening validation.
+
+## Extended cycle 6 — promoted-portfolio alignment evaluation (2026-08-01)
+
+- Problem: dynamic clustering showed zero strong alignments even though a promoted component-lifecycle gap aligned with operational phase-transition and niche mechanisms.
+- Root cause: the benchmark aligned mechanisms only to the first promoted/raw gap, which was a coverage gap rather than the lifecycle direction.
+- Repair: audit all promoted representative gaps, select the strongest accepted typed path for candidate evaluation, use task-appropriate external fixtures, and add a bounded model-selection operator so the second production direction has a concrete rule rather than a dead end.
+- Tests: evaluation harness, two complete AppTest direction paths, diagram failure fallback, and secret-loading tests cover the final behavior.
+- Actual output inspected: dynamic clustering reports 3 promoted directions, 3 operational mechanisms, 1 strong alignment, 1 candidate draft, and 1 final idea. Missingness remains 2/2/1/2; recurring drift remains 3/3/1/3. Two UI directions both reach Part 3; the second now changes Gaussian Process model selection with a bounded recent-loss verification rule.
+- Score before: 4, 3, 4, 4, 4, 5, 3, 5.
+- Score after: 5, 5, 5, 5, 4, 5, 5, 5.
+- Remaining issue: complete full-suite, clean archive, local launch, live anonymous probe, and bounded production verification.
+- Next decision: no model adoption; measured problems were orchestration and benchmark validity, not representation quality.
+
 Scores are clarity, practicality, readability, evidence transparency, error recovery, and visual hierarchy on a 0–5 scale.
 
 ## Cycle 1 — concrete candidate modification

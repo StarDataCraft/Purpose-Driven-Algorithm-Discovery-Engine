@@ -76,6 +76,15 @@ class StageFunnel:
     valid_mechanisms: int = 0
     strong_structural_alignments: int = 0
     candidates_surviving_falsification: int = 0
+    human_reviewed_papers: int = 0
+    evidence_events: int = 0
+    raw_gap_instances: int = 0
+    canonical_gap_families: int = 0
+    promoted_directions: int = 0
+    mechanism_bearing_papers: int = 0
+    plausible_structural_alignments: int = 0
+    candidate_drafts: int = 0
+    final_ideas: int = 0
 
     def rates(self) -> dict[str, float]:
         values = list(self.__dict__.items())

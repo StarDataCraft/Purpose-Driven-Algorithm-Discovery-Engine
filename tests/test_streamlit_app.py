@@ -169,3 +169,22 @@ def test_same_direction_reuses_and_different_direction_rebuilds_external_state()
     )
     assert "Complete Step 4" not in visible
     assert "('Novelty remains unverified.',)" not in visible
+
+
+def test_two_distinct_directions_complete_all_three_parts():
+    app = run_to_part_3(app_start())
+    first_explanation = app.session_state["current_result_explanation"]
+    first_direction = first_explanation.direction_id
+
+    app.radio(key="_primary_step").set_value(PART_1).run()
+    app.button(key="_select_direction_1").click().run(timeout=30)
+    app.button(key="_derive_ideas").click().run(timeout=30)
+    app.button(key="_select_idea_0").click().run(timeout=30)
+
+    second_explanation = app.session_state["current_result_explanation"]
+    assert second_explanation.direction_id != first_direction
+    assert second_explanation.proposed_change
+    assert "argmin" in second_explanation.proposed_change
+    assert second_explanation.modification_slot == "model_selection"
+    assert len(app.get("graphviz_chart")) >= 3
+    assert not app.exception

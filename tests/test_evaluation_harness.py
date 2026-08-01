@@ -114,7 +114,15 @@ def test_offline_end_to_end_evaluation_all_tasks(tmp_path):
             "relevant_external_papers", "valid_mechanisms",
             "strong_structural_alignments",
             "candidates_surviving_falsification",
+            "human_reviewed_papers", "evidence_events",
+            "raw_gap_instances", "canonical_gap_families",
+            "promoted_directions", "mechanism_bearing_papers",
+            "plausible_structural_alignments", "candidate_drafts",
+            "final_ideas",
         }
+        assert report.funnel.valid_gaps == report.funnel.promoted_directions
+        assert report.funnel.canonical_gap_families <= report.funnel.raw_gap_instances
+        assert report.funnel.final_ideas <= report.funnel.candidate_drafts
         assert all(
             set(item.score_components) == {
                 "problem_specificity", "evidence_strength",

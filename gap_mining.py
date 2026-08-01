@@ -56,6 +56,16 @@ def _algorithm_for(text: str, purpose: PurposeContract | None) -> tuple[str, str
         matched = next((record for record in library.values() if record.family == family), None)
         if matched:
             return matched.name, matched.family, matched.modifiable_slots[0]
+        failure = purpose.current_failure.casefold()
+        slot = (
+            "feature_acquisition" if "missing" in failure
+            else "component_birth_death" if any(
+                term in failure for term in ("birth", "death", "split", "merge")
+            )
+            else "memory" if "recurr" in failure
+            else "update_rule"
+        )
+        return family, family, slot
     return "Unspecified", "unspecified", "update_rule"
 
 
