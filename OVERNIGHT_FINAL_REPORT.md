@@ -34,15 +34,15 @@
 32. Tests added: daily/transient 429 and circuit behavior, API-key redaction, anonymous budgets, arXiv continuation, duplicate-query coalescing, native external queries, adaptive Stage 2 and early stop, family/slot preservation, funnel accounting, two complete UI direction paths, and diagram fallback.
 33. Final pytest result: 121 passed in 87.75 seconds in the working tree before the final commit.
 34. AppTest result: startup, the primary page, full three-part workflow, state invalidation, and two distinct complete direction paths pass within the suite.
-35. Clean-tree result: pending the final committed archive verification; it must pass the same full suite, compile, import, and deployment smoke gates.
+35. Clean-tree result: Git archive at checkpoint `6871d1f8cee7debd5f94491ea885dbfdcbcd56e3` passed 121 tests in 87.94 seconds, compile, archive-local import, and deployment smoke.
 36. Local Streamlit result: headless launch on port 8765 succeeded; `/_stcore/health` returned `ok`, root returned HTTP 200, and the startup log contained no exception.
-37. Production verification: bounded after the final `main` push. If the public URL redirects to authentication, no visible-build claim will be made.
+37. Production verification: no production URL is recorded in repository configuration, GitHub reports no deployments for the public repository, and bounded search found no matching Streamlit app. Direct production or visible-build verification is therefore not claimed.
 38. Remaining scientific limitations: automatic relevance is not human review; fixture benchmarks cannot establish novelty or current whole-literature recall; deterministic mechanism alignment cannot establish empirical performance.
 39. Remaining deployment limitations: production propagation and authenticated build logs are outside repository control; optional API-key mode depends on a runtime secret configured by the deployer.
 40. Final commit SHA: authoritative value is `git rev-parse HEAD` after this report is committed and merged.
-41. Push result: authoritative result is the final normal `git push origin main`; no force push is used.
-42. Final Git status: must be clean with local `HEAD` equal to `origin/main` before completion.
+41. Push result: checkpoint `6871d1f8cee7debd5f94491ea885dbfdcbcd56e3` was fast-forwarded and pushed normally to `origin/main`; no force push was used. This evidence-only report update is pushed normally afterward.
+42. Final Git status: verified after the report update; completion requires a clean `main` with local `HEAD` equal to `origin/main`.
 
 ## Acceptance decision
 
-The working-tree scientific and engineering gates pass. Final acceptance is contingent only on the clean archive, local Streamlit launch, safe update/merge to `main`, normal push, SHA equality, and bounded production check described above.
+All locally verifiable scientific and engineering gates pass. The production build remains unverified because no deploy target is discoverable from the repository or public GitHub deployment metadata.
