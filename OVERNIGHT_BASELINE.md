@@ -1,4 +1,29 @@
-# Overnight baseline — 2026-07-31
+# Overnight baseline
+
+## Extended cycle — 2026-08-01
+
+- Starting commit: `e5f7942217ce6943d1cf80d52cfa202e2e250427`.
+- Safety branch: `backup/pre-autonomous-cycle-20260801`.
+- Working branch: `overnight/autonomous-quality-20260801`.
+- Repository was clean on `main`; origin matched the required GitHub URL.
+- Baseline compile, import, and deployment smoke passed. The inherited suite contained 108 tests and passed before the cycle.
+- The three-part deterministic workflow was operational, but OpenAlex had no canonical client, shared limiter, typed quota state, query budget, or circuit breaker.
+- A 429 was treated by the generic request retry loop; later queries continued and could create a request storm.
+- Each unbound request could create a new `requests.Session`.
+- External retrieval generated up to five domains and all templates, then appended the ML slot (for example `aggregation`) to native-domain queries.
+- Failure messages accumulated per query and were also repeated in the sidebar as raw JSON.
+- OpenAlex `per-page` followed the small per-query UI value rather than retrieving a useful candidate pool in one call.
+- The runtime process had no `OPENALEX_API_KEY`; anonymous behavior was not explicitly budgeted or explained.
+- No supplied credential was written, printed, serialized, or added to Git configuration.
+
+### Baseline scientific and deployment concerns
+
+- Exhaustive external fan-out spent requests without evidence-based stopping.
+- Rate-limit failure could make Part 2 unusable even when arXiv remained available.
+- OpenAlex cache keys did not record selected fields or query-profile version.
+- Production still redirects unauthenticated inspection to Streamlit login, so visible build verification remains constrained.
+
+## Prior cycle — 2026-07-31
 
 Starting commit: `87b8cfb3d5fa02de19ed760c7ef3d9fef0bdf856`
 

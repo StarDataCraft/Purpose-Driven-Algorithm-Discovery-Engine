@@ -132,7 +132,34 @@ def test_direction_queries_are_distinct_and_identity_is_preserved(
         adapters=adapters(external_papers), cache_directory=tmp_path / item.direction_id,
     ) for item in (first, second)]
     assert results[0].identity() != results[1].identity()
-    assert results[0].accepted_queries_by_domain != results[1].accepted_queries_by_domain
+    # Native external queries may be shared when two directions have the same
+    # cross-domain problem. Direction specificity belongs in typed alignment,
+    # not by contaminating source-domain queries with an ML component name.
+    assert (
+        results[0].cross_domain_problem_signature.affected_ml_slot
+        != results[1].cross_domain_problem_signature.affected_ml_slot
+    )
+
+
+def test_external_queries_do_not_append_ml_modification_slots(
+    tmp_path, purpose, ml_papers, external_papers,
+):
+    run, directions, gaps = context(purpose, ml_papers)
+    direction = directions[0]
+    gap = gaps[direction.selected_gap_id]
+    result = discover_external_mechanisms_for_direction(
+        purpose=purpose, direction=direction, gap=gap, parent_run=run,
+        search_policy=SearchPolicy("LIVE"), adapters=adapters(external_papers),
+        cache_directory=tmp_path,
+    )
+    slot = gap.affected_component.replace("_", " ")
+    assert all(
+        not query.casefold().endswith(slot.casefold())
+        for queries in result.accepted_queries_by_domain.values()
+        for query in queries
+    )
+    assert len(result.accepted_queries_by_domain) <= 3
+    assert all(len(queries) <= 2 for queries in result.accepted_queries_by_domain.values())
 
 
 def test_no_mechanism_and_no_alignment_have_stage_specific_errors(

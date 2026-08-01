@@ -115,3 +115,22 @@ def test_dedup_preserves_all_provenance(tmp_path, purpose):
         item["retrieval_origin"] for item in papers[0].provenance_history
     }
     assert origins == {"live_openalex", "live_arxiv"}
+
+
+def test_normalized_duplicate_queries_are_coalesced_by_run_cache(
+    tmp_path, purpose,
+):
+    calls = []
+
+    def adapter(*args):
+        calls.append(args[0])
+        return [paper("oa", "openalex")]
+
+    papers, run = retrieve_corpus(
+        purpose, ["Recurring   Drift", " recurring drift "],
+        sources=["openalex"], adapters={"openalex": adapter},
+        cache_directory=tmp_path,
+    )
+    assert papers
+    assert calls == ["Recurring   Drift"]
+    assert run.source_results[0].cache_hits == 1

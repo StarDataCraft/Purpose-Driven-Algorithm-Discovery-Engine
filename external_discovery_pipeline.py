@@ -109,13 +109,11 @@ def discover_external_mechanisms_for_direction(
     selections = select_external_domains(signature, SETTINGS.maximum_external_domains)
     selected_domains = [item.domain for item in selections if item.selected]
     base_queries = generate_external_queries(gap, selected_domains)
-    # Domain templates can otherwise be identical for two structurally
-    # different gaps.  The affected ML slot is a deterministic, auditable
-    # direction qualifier rather than a free-form generated expansion.
-    qualifier = gap.affected_component.replace("_", " ")
+    # Keep external queries native to their source discipline. The ML slot is
+    # introduced later during typed structural alignment, never retrieval.
     queries_by_domain = {
-        domain: [f"{query} {qualifier}" for query in queries]
-        for domain, queries in base_queries.items()
+        domain: list(queries[:2])
+        for domain, queries in list(base_queries.items())[:3]
     }
     query_pairs = [
         (domain, query) for domain, queries in queries_by_domain.items()

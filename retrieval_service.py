@@ -10,7 +10,13 @@ from uuid import uuid4
 
 from app_settings import SETTINGS
 from models import Paper, PurposeContract
-from paper_fetchers import PaperCache, deduplicate_papers, fetch_papers_detailed
+from openalex_client import (
+    OpenAlexRequestError, default_query_budget, get_openalex_client,
+)
+from paper_fetchers import (
+    PaperCache, deduplicate_papers, fetch_openalex, fetch_arxiv,
+    fetch_papers_detailed,
+)
 from run_models import (
     ResearchRun, SourceRetrievalResult, StageRun, paper_provenance, utc_now,
 )
@@ -23,7 +29,16 @@ FixtureLoader = Callable[..., object]
 def _cache_key(
     query: str, source: str, maximum: int, years: tuple[int, int],
 ) -> str:
-    return f"live-v2:{source}:{maximum}:{years[0]}:{years[1]}:{query}"
+    normalized_query = " ".join(query.casefold().split())
+    selected_fields = (
+        "id,title,publication_year,doi,primary_location,"
+        "abstract_inverted_index,cited_by_count"
+        if source == "openalex" else "atom-default"
+    )
+    return (
+        f"live-v3:{source}:{normalized_query}:{years[0]}:{years[1]}:"
+        f"{selected_fields}:per_page={maximum}:problem-query-v2"
+    )
 
 
 def retrieve_corpus(
@@ -61,6 +76,18 @@ def retrieve_corpus(
     sources = sources or ["openalex", "arxiv"]
     run.sources_attempted = list(sources)
     cache = PaperCache(cache_directory)
+    openalex_client = get_openalex_client()
+    openalex_budget = openalex_client.begin_run(
+        default_query_budget(openalex_client.authentication_mode)
+    )
+    if adapters is None:
+        adapters = {
+            "openalex": lambda query, maximum, start, end: fetch_openalex(
+                query, maximum, start, end, client=openalex_client,
+                budget=openalex_budget, stage_name=stage_name,
+            ),
+            "arxiv": fetch_arxiv,
+        }
     all_papers: list[Paper] = []
     stage = StageRun(
         stage_id=f"{run.run_id}:{stage_name}", stage_name=stage_name,
@@ -162,6 +189,13 @@ def retrieve_corpus(
                     source_papers.extend(fetched)
                     if fetched:
                         cache.put_entry(key, fetched, asdict(diagnostics))
+                except OpenAlexRequestError as exc:
+                    result.failure_count += 1
+                    result.api_status = exc.category
+                    result.failure_messages.append(str(exc))
+                    skipped = len(queries) - query_index - 1
+                    openalex_client.state.skipped_queries += skipped
+                    break
                 except Exception as exc:
                     result.failure_count += 1
                     result.failure_messages.append(f"{type(exc).__name__}: {exc}")
@@ -266,6 +300,21 @@ def retrieve_corpus(
             for paper in papers
         ),
     } for index, query in enumerate(queries)]
+    if "openalex" in sources:
+        stage.metadata["openalex_rate_limit"] = (
+            openalex_client.state.safe_dict()
+        )
+        stage.metadata["openalex_query_budget"] = {
+            "authentication_mode": openalex_budget.authentication_mode,
+            "total_limit": openalex_budget.total_limit,
+            "total_used": openalex_budget.total_used,
+            "stage_limits": dict(openalex_budget.stage_limits),
+            "stage_used": dict(openalex_budget.stage_used),
+        }
+        if openalex_client.authentication_mode == "ANONYMOUS":
+            run.warnings.append(
+                "OpenAlex is operating with a conservative anonymous request budget."
+            )
     run.stages.append(stage)
     if run.actual_search_mode == "FAILED":
         run.errors.append("No usable literature corpus was produced.")

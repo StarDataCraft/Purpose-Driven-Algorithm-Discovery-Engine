@@ -2036,6 +2036,7 @@ def render_compact_run_summary() -> None:
             "Offline demonstration — bundled papers are not a current "
             "literature review."
         )
+    render_openalex_status(run)
     columns = st.columns(4)
     columns[0].metric("Candidate papers", run.candidate_paper_count)
     columns[1].metric(
@@ -2051,6 +2052,39 @@ def render_compact_run_summary() -> None:
         f"Canonical families: {run.canonical_gap_family_count} · "
         f"Promoted directions: {run.promoted_gap_count}"
     )
+
+
+def openalex_status(run: ResearchRun | None) -> dict[str, object]:
+    if not run:
+        return {}
+    stage = next((
+        item for item in reversed(run.stages)
+        if item.metadata.get("openalex_rate_limit")
+    ), None)
+    return dict(stage.metadata.get("openalex_rate_limit", {})) if stage else {}
+
+
+def render_openalex_status(run: ResearchRun | None) -> None:
+    """Render one concise, credential-free OpenAlex state message."""
+    state = openalex_status(run)
+    if not state:
+        return
+    if state.get("daily_limit_exhausted"):
+        retained_arxiv = next((
+            item.unique_returned_count for item in run.source_results
+            if item.source == "arxiv"
+        ), 0)
+        st.warning(
+            "OpenAlex request limit reached. "
+            f"Successful requests: {state.get('requests_this_run', 0)} · "
+            f"Skipped queries: {state.get('skipped_queries', 0)} · "
+            f"arXiv papers retained: {retained_arxiv} · "
+            f"Reset: {state.get('reset_at') or 'not reported'}."
+        )
+    elif state.get("authentication_mode") == "ANONYMOUS":
+        st.info(
+            "OpenAlex is operating with a conservative anonymous request budget."
+        )
 
 
 def render_related_papers(direction: object) -> None:
@@ -2397,6 +2431,7 @@ def analyze_gap_page() -> None:
                 "OFFLINE DEMONSTRATION — external evidence uses bundled papers "
                 "and is not a current literature search."
             )
+        render_openalex_status(retrieval)
         render_fields({
             "Actual search mode": retrieval.actual_search_mode,
             "Sources": readable_items(retrieval.sources_attempted),
@@ -2410,7 +2445,7 @@ def analyze_gap_page() -> None:
             "Cache used": "Yes" if retrieval.cache_used else "No",
             "Result origin": "session state" if external.reused_from_session else "new direction-scoped run",
         })
-        with st.expander("Queries, failures, and warnings"):
+        with st.expander("Technical diagnostics · queries and source status"):
             st.write(external.accepted_queries_by_domain)
             render_fields({
                 "Source failures": retrieval.source_failures or "None",
@@ -2742,9 +2777,6 @@ def main() -> None:
     if st.session_state.ml_papers:
         with st.sidebar.expander("Trend radar"):
             st.json(trend_indicators(st.session_state.ml_papers + st.session_state.external_papers))
-    if st.session_state.fetch_failures:
-        st.sidebar.warning("Partial source failures occurred; available results remain usable.")
-        st.sidebar.json(st.session_state.fetch_failures)
 
 
 if __name__ == "__main__":

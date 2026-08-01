@@ -15,6 +15,9 @@ import requests
 
 from app_settings import SETTINGS
 from models import Paper
+from openalex_client import (
+    OpenAlexClient, QueryBudget, default_query_budget, get_openalex_client,
+)
 from text_processing import fingerprint, normalized_title
 
 
@@ -72,15 +75,25 @@ def _openalex_abstract(index: dict[str, list[int]] | None) -> str:
 
 def fetch_openalex(query: str, max_results: int = 20, start_year: int = 2021,
                    end_year: int = 2026, timeout: float = SETTINGS.request_timeout,
-                   session: requests.Session | None = None) -> list[Paper]:
+                   session: requests.Session | None = None,
+                   client: OpenAlexClient | None = None,
+                   budget: QueryBudget | None = None,
+                   stage_name: str = "broad_ml_retrieval") -> list[Paper]:
     params: dict[str, str | int] = {
-        "search": query, "per-page": min(max_results, 50),
+        "search": query, "per-page": min(max(max_results, 25), 50),
         "filter": f"from_publication_date:{start_year}-01-01,to_publication_date:{end_year}-12-31",
         "select": "id,title,publication_year,doi,primary_location,abstract_inverted_index,cited_by_count",
     }
     if SETTINGS.openalex_email:
         params["mailto"] = SETTINGS.openalex_email
-    response = _request("https://api.openalex.org/works", params, timeout, session)
+    client = client or get_openalex_client()
+    budget = budget or client.begin_run(
+        default_query_budget(client.authentication_mode)
+    )
+    response = client.get_works(
+        params, timeout=timeout, budget=budget, stage=stage_name,
+        max_retries=SETTINGS.max_retries,
+    )
     papers = []
     for work in response.json().get("results", []):
         location = work.get("primary_location") or {}
