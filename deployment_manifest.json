@@ -4,7 +4,7 @@
   "ux_schema_version": "selected-idea-context-v1",
   "expected_entrypoint": "app.py",
   "expected_branch": "main",
-  "app_source_fingerprint": "2b462df316e2b2c88c71f6aa6d530505145518f76b291aacc5b7f71887617e9e",
+  "app_source_fingerprint": "3cb42c3ca969580ff14ae65613ee61b511dd04b8176c32ce52ecff50dbf0fab4",
   "ux_models_source_fingerprint": "05c2b6df7e8f53cc528290d675843f2a8c33fe5feb5f66d3663bbc5fd6d67409",
   "primary_idea_selection_source_fingerprint": "81487a48a4f7c05b092aed30596cd5c21141fa0c07794bf2e3b99d6128cf6c24"
 }

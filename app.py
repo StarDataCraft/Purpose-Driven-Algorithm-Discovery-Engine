@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import csv
 import io
+import importlib
 import time
 from collections import Counter
 from dataclasses import asdict
@@ -13,6 +14,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import streamlit as st
+import ux_models as ux_models_module
 
 from algorithm_library import load_algorithm_library
 from app_settings import SETTINGS
@@ -56,7 +58,7 @@ from run_models import utc_now
 from result_explanation import research_result
 from ux_models import (
     PIPELINE_VERSION, SELECTED_IDEA_SCHEMA_VERSION, SelectedIdeaContext,
-    build_tiered_direction_portfolio, build_idea_derivation, build_idea_explanation,
+    build_idea_derivation, build_idea_explanation,
     candidate_from_dict, candidate_modification, candidate_to_dict,
     derivation_from_dict, derivation_to_dict, direction_from_dict,
     direction_to_dict, gap_from_dict, gap_to_dict, selected_idea_fingerprints,
@@ -69,6 +71,9 @@ from external_discovery_pipeline import SearchPolicy
 from session_schema import SESSION_STATE_SCHEMA_VERSION, resolve_external_result
 from idea_pipeline import derive_ideas_for_direction
 from primary_idea_selection import select_primary_idea
+
+if not hasattr(ux_models_module, "build_tiered_direction_portfolio"):
+    ux_models_module = importlib.reload(ux_models_module)
 
 PRIMARY_STEPS = [
     "1 · Discover directions / 发现方向",
@@ -2095,7 +2100,7 @@ def execute_direction_search(
     record_discovery_stages(run, discovery)
     run.structural_gap_count = len(discovery.gaps)
     generate_quality_warnings(run)
-    portfolio_result = build_tiered_direction_portfolio(
+    portfolio_result = ux_models_module.build_tiered_direction_portfolio(
         run_id=run.run_id, purpose=purpose,
         promoted_families=discovery.consolidation.promoted,
         exploratory_families=discovery.consolidation.exploratory,
