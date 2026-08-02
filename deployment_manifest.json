@@ -4,9 +4,10 @@
   "ux_schema_version": "selected-idea-context-v1",
   "expected_entrypoint": "app.py",
   "expected_branch": "main",
-  "app_source_fingerprint": "2e1f893488ea41f5d0c1a6835b708e72d933ef1f9529ffafa2fda9dc4f452180",
+  "app_source_fingerprint": "1f7e39e99f1f2c26002430267a2bac86996bdcc7ba3c816921fee544d75b5224",
   "ux_models_source_fingerprint": "4cf8da4883854622db33e4bc068c634954133f3a95893a612abde3136cfea706",
   "direction_generation_source_fingerprint": "218847142d2e720870603eb3717a08d3335ab05778fd3a7ecbda40acde9f562c",
   "scientific_validation_source_fingerprint": "c2be5ed579ffe0cad6037bd5b6aba8fcfb5d4af10d473871e99b72c80954c3ba",
-  "primary_idea_selection_source_fingerprint": "a164a8313fbff44ab72e7db7b769c12a4901c0ed259bfd404d9972f66b19b41f"
+  "primary_idea_contracts_source_fingerprint": "26dbac369028aa1745a07965f8ffa33b9ab131092c5fb42eb9d9428cd58dd46d",
+  "primary_idea_selection_source_fingerprint": "93453d5a85854f2bc0e35f63d7e8adb3271f8d10e45d56857fb693ee385a494f"
 }

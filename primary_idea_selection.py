@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Sequence
 
 from models import AlgorithmCandidate, GapSignature, Paper, PurposeContract
+from primary_idea_contracts import (
+    PRIMARY_IDEA_SELECTION_API_VERSION, PrimaryIdeaSelectionRequest,
+)
 from run_models import ResearchRun
 from scientific_validation import validate_candidate_for_promotion
 from ux_models import DirectionSummary, IdeaDerivation, candidate_modification
@@ -144,15 +147,19 @@ def _dimensions(candidate: AlgorithmCandidate, derivation: IdeaDerivation) -> di
 
 
 def select_primary_idea(
-    *, candidates: Sequence[AlgorithmCandidate],
-    derivations: Sequence[IdeaDerivation], direction: DirectionSummary,
-    gap: GapSignature, parent_run: ResearchRun,
-    automatic_recovery_used: bool = False,
-    purpose: PurposeContract | None = None,
-    papers: Sequence[Paper] = (),
-    full_audits: dict[str, object] | None = None,
+    request: PrimaryIdeaSelectionRequest,
 ) -> PrimaryIdeaSelectionResult:
     """Apply non-overridable gates, then stable weighted ranking."""
+    request.validate()
+    candidates = request.candidates
+    derivations = request.derivations
+    direction = request.direction
+    gap = request.gap
+    parent_run = request.parent_run
+    automatic_recovery_used = request.automatic_recovery_used
+    purpose = request.purpose
+    papers = request.papers
+    full_audits = request.full_audits
     if not candidates:
         return PrimaryIdeaSelectionResult(
             "NO_CANDIDATES", automatic_recovery_used=automatic_recovery_used,
@@ -236,24 +243,48 @@ def select_primary_idea(
     )
 
 
+def select_primary_idea_legacy(
+    *, candidates: Sequence[AlgorithmCandidate],
+    derivations: Sequence[IdeaDerivation], direction: DirectionSummary,
+    gap: GapSignature, parent_run: ResearchRun,
+    automatic_recovery_used: bool = False,
+    purpose: PurposeContract | None = None,
+    papers: Sequence[Paper] = (),
+    full_audits: dict[str, object] | None = None,
+) -> PrimaryIdeaSelectionResult:
+    """Temporary explicit adapter for internal callers; unknown args still fail."""
+    return select_primary_idea(PrimaryIdeaSelectionRequest(
+        api_version=PRIMARY_IDEA_SELECTION_API_VERSION,
+        candidates=tuple(candidates), derivations=tuple(derivations),
+        direction=direction, gap=gap, parent_run=parent_run,
+        automatic_recovery_used=automatic_recovery_used,
+        purpose=purpose, papers=tuple(papers), full_audits=dict(full_audits or {}),
+    ))
+
+
 def select_primary_idea_with_recovery(
     *, candidates: Sequence[AlgorithmCandidate],
     derivations: Sequence[IdeaDerivation], direction: DirectionSummary,
     gap: GapSignature, parent_run: ResearchRun,
     recover: Callable[[], tuple[Sequence[AlgorithmCandidate], Sequence[IdeaDerivation]]],
+    purpose: PurposeContract | None = None,
+    papers: Sequence[Paper] = (),
+    full_audits: dict[str, object] | None = None,
 ) -> PrimaryIdeaSelectionResult:
     """Run exactly one bounded evidence-recovery callback when selection fails."""
-    initial = select_primary_idea(
+    initial = select_primary_idea_legacy(
         candidates=candidates, derivations=derivations, direction=direction,
-        gap=gap, parent_run=parent_run,
+        gap=gap, parent_run=parent_run, purpose=purpose, papers=papers,
+        full_audits=full_audits,
     )
     if initial.status == "SELECTED":
         return initial
     recovered_candidates, recovered_derivations = recover()
-    result = select_primary_idea(
+    result = select_primary_idea_legacy(
         candidates=recovered_candidates, derivations=recovered_derivations,
         direction=direction, gap=gap, parent_run=parent_run,
-        automatic_recovery_used=True,
+        automatic_recovery_used=True, purpose=purpose, papers=papers,
+        full_audits=full_audits,
     )
     if result.status != "SELECTED":
         result.warnings.append("One bounded automatic recovery cycle was exhausted.")

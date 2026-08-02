@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import platform
+import inspect
 import sys
 
 
@@ -26,6 +27,8 @@ from evaluation.schemas import (
 import gap_consolidation
 import models
 import ux_models
+import primary_idea_selection
+import primary_idea_contracts
 from ux_models import (
     PIPELINE_VERSION, SELECTED_IDEA_SCHEMA_VERSION, SelectedIdeaContext,
     build_direction_portfolio, build_idea_derivation, build_idea_explanation,
@@ -76,6 +79,12 @@ def main() -> None:
     print("gap_consolidation module:", gap_consolidation.__file__)
     print("app module file:", app.__file__)
     print("commit SHA:", info["commit_sha"])
+    print("app.py path and fingerprint:", app.__file__, info["source_fingerprints"]["app.py"])
+    print("primary_idea_selection.py path and fingerprint:", primary_idea_selection.__file__, info["source_fingerprints"]["primary_idea_selection.py"])
+    print("primary_idea_contracts.py path and fingerprint:", primary_idea_contracts.__file__, info["source_fingerprints"]["primary_idea_contracts.py"])
+    print("selector API version:", primary_idea_selection.PRIMARY_IDEA_SELECTION_API_VERSION)
+    print("selector signature:", inspect.signature(primary_idea_selection.select_primary_idea))
+    assert tuple(inspect.signature(primary_idea_selection.select_primary_idea).parameters) == ("request",)
     print("source fingerprints:", {
         name: value[:8] for name, value in info["source_fingerprints"].items()
     })

@@ -17,7 +17,8 @@ from gap_consolidation import (
 )
 from idea_pipeline import derive_ideas_for_direction
 from primary_idea_selection import (
-    select_primary_idea, select_primary_idea_with_recovery,
+    select_primary_idea_legacy as select_primary_idea,
+    select_primary_idea_with_recovery,
 )
 from models import Paper
 from scientific_validation import (

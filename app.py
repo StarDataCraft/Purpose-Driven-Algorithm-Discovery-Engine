@@ -6,6 +6,7 @@ import json
 import csv
 import io
 import importlib
+import inspect
 import time
 from collections import Counter
 from dataclasses import asdict
@@ -15,6 +16,7 @@ from uuid import uuid4
 
 import streamlit as st
 import ux_models as ux_models_module
+import primary_idea_selection as primary_selector
 
 from algorithm_library import load_algorithm_library
 from app_settings import SETTINGS
@@ -73,7 +75,40 @@ from diagram_builders import (
 from external_discovery_pipeline import SearchPolicy
 from session_schema import SESSION_STATE_SCHEMA_VERSION, resolve_external_result
 from idea_pipeline import derive_ideas_for_direction
-from primary_idea_selection import select_primary_idea
+from primary_idea_contracts import (
+    PRIMARY_IDEA_SELECTION_API_VERSION, PrimaryIdeaSelectionRequest,
+)
+
+EXPECTED_PRIMARY_IDEA_SELECTION_API_VERSION = "primary-idea-selection-v2"
+
+
+def selector_contract_diagnostic() -> dict[str, object]:
+    loaded = getattr(
+        primary_selector, "PRIMARY_IDEA_SELECTION_API_VERSION", "missing",
+    )
+    function = getattr(primary_selector, "select_primary_idea", None)
+    signature = str(inspect.signature(function)) if callable(function) else "missing"
+    return {
+        "compatible": (
+            loaded == EXPECTED_PRIMARY_IDEA_SELECTION_API_VERSION
+            and callable(function)
+            and tuple(inspect.signature(function).parameters) == ("request",)
+        ),
+        "expected_api_version": EXPECTED_PRIMARY_IDEA_SELECTION_API_VERSION,
+        "loaded_api_version": loaded,
+        "module_path": getattr(primary_selector, "__file__", "unknown"),
+        "function_signature": signature,
+    }
+
+
+def assert_selector_contract() -> None:
+    diagnostic = selector_contract_diagnostic()
+    assert diagnostic["compatible"], (
+        "Primary-idea selection modules are incompatible: "
+        f"expected {diagnostic['expected_api_version']}, "
+        f"loaded {diagnostic['loaded_api_version']}, "
+        f"signature {diagnostic['function_signature']}."
+    )
 
 if not hasattr(ux_models_module, "build_tiered_direction_portfolio"):
     ux_models_module = importlib.reload(ux_models_module)
@@ -2975,14 +3010,17 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
                 result.external_result.warnings.append(
                     f"Pre-promotion audit failed for {candidate.candidate_id}: {type(exc).__name__}"
                 )
-    selection = select_primary_idea(
-        candidates=result.portfolio, derivations=result.derivations,
+    request = PrimaryIdeaSelectionRequest(
+        api_version=PRIMARY_IDEA_SELECTION_API_VERSION,
+        candidates=tuple(result.portfolio), derivations=tuple(result.derivations),
         direction=direction, gap=gap, parent_run=run,
         automatic_recovery_used=recovery_used,
         purpose=st.session_state.purpose,
-        papers=[*st.session_state.ml_papers, *result.external_result.papers],
-        full_audits=full_audits,
+        papers=tuple([*st.session_state.ml_papers, *result.external_result.papers]),
+        full_audits=dict(full_audits),
     )
+    request.validate()
+    selection = primary_selector.select_primary_idea(request)
     if selection.status != "SELECTED" and not recovery_used:
         st.session_state.automatic_recovery_attempted = True
         run.search_policy = SearchPolicy(
@@ -3781,6 +3819,7 @@ def research_tools_panel() -> None:
             )},
         ], use_container_width=True)
         st.subheader("Build identity")
+        selector = selector_contract_diagnostic()
         st.write({
             "Application version": info["application_version"],
             "Running commit": info["commit_sha"],
@@ -3792,6 +3831,10 @@ def research_tools_panel() -> None:
             "Evaluation schema": info["evaluation_schema_version"],
             "Engine mode": info["engine_mode"],
             "Measured workflow timings": st.session_state.ux_performance,
+            "Expected selector API": selector["expected_api_version"],
+            "Loaded selector API": selector["loaded_api_version"],
+            "Loaded selector module": selector["module_path"],
+            "Loaded selector signature": selector["function_signature"],
         })
         st.subheader("Source fingerprints")
         st.dataframe([{
@@ -3812,6 +3855,7 @@ def research_tools_panel() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Purpose-Driven Algorithm Discovery", layout="wide")
+    selector = selector_contract_diagnostic()
     initialize_state()
     pending = st.session_state.pending_primary_step
     if pending:
@@ -3819,6 +3863,17 @@ def main() -> None:
         st.session_state.active_primary_step = pending
         st.session_state.pending_primary_step = ""
     page = sidebar()
+    if not selector["compatible"] and page != PRIMARY_STEPS[0]:
+        st.title("Purpose-Driven Algorithm Discovery")
+        st.error("Primary-idea selection modules are incompatible.")
+        st.write(
+            "The deployed app.py expects API version "
+            f"{selector['expected_api_version']}, but primary_idea_selection.py "
+            f"provides {selector['loaded_api_version']}."
+        )
+        with st.expander("Technical details · selector contract"):
+            st.write(selector)
+        return
     if page == PRIMARY_STEPS[2] and validate_selected_idea_state() not in {
         "COMPLETE", "LEGACY_CONTEXT", "RECOVERABLE_ID_ONLY",
     }:
