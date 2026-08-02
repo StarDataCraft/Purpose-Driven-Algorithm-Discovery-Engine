@@ -3236,6 +3236,7 @@ def research_tools_panel() -> None:
             "Build timestamp": info["build_timestamp"],
             "Python": info["python_version"],
             "Pipeline version": info["pipeline_version"],
+            "UX schema version": info["ux_schema_version"],
             "Run-model schema": info["run_model_schema_version"],
             "Evaluation schema": info["evaluation_schema_version"],
             "Engine mode": info["engine_mode"],

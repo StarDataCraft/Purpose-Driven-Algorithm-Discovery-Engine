@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import platform
 import sys
 
 
@@ -22,9 +23,28 @@ from evaluation.schemas import (
     AuditDimension as ExportedDimension,
     ResultAudit as ExportedAudit,
 )
+import gap_consolidation
+import models
+import ux_models
+from ux_models import (
+    PIPELINE_VERSION, SELECTED_IDEA_SCHEMA_VERSION, SelectedIdeaContext,
+    build_direction_portfolio, build_idea_derivation, build_idea_explanation,
+    candidate_from_dict, candidate_modification, candidate_to_dict,
+    derivation_from_dict, derivation_to_dict, direction_from_dict,
+    direction_to_dict, gap_from_dict, gap_to_dict, selected_idea_fingerprints,
+)
 
 
 def main() -> None:
+    required_ux_symbols = (
+        PIPELINE_VERSION, SELECTED_IDEA_SCHEMA_VERSION, SelectedIdeaContext,
+        build_direction_portfolio, build_idea_derivation,
+        build_idea_explanation, candidate_from_dict, candidate_modification,
+        candidate_to_dict, derivation_from_dict, derivation_to_dict,
+        direction_from_dict, direction_to_dict, gap_from_dict, gap_to_dict,
+        selected_idea_fingerprints,
+    )
+    assert all(symbol is not None for symbol in required_ux_symbols)
     assert SearchExportedResearchRun is ResearchRun
     assert LegacyExportedResearchRun is ResearchRun
     assert AuditDimension is ExportedDimension
@@ -47,7 +67,18 @@ def main() -> None:
     print("result_audit module:", audit_spec.origin if audit_spec else None)
     print("canonical run models:", run_spec.origin if run_spec else None)
     print("search_runs compatibility module:", search_spec.origin if search_spec else None)
-    import app  # noqa: F401
+    import app
+    info = build_information("lightweight")
+    print("python version:", platform.python_version())
+    print("working directory:", Path.cwd())
+    print("ux_models module:", ux_models.__file__)
+    print("models module:", models.__file__)
+    print("gap_consolidation module:", gap_consolidation.__file__)
+    print("app module file:", app.__file__)
+    print("commit SHA:", info["commit_sha"])
+    print("source fingerprints:", {
+        name: value[:8] for name, value in info["source_fingerprints"].items()
+    })
 
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
     if at.exception:
@@ -64,7 +95,6 @@ def main() -> None:
     assert "Startup capability health" in visible
     assert "Build identity" in visible
     assert "Source fingerprints" in visible
-    info = build_information("lightweight")
     assert info["commit_sha"]
     assert all(
         value != "missing" for value in info["source_fingerprints"].values()

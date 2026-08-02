@@ -16,8 +16,11 @@ from evaluation import EVALUATION_SCHEMA_VERSION
 APPLICATION_VERSION = "three-part-ux-v1"
 PIPELINE_VERSION = "three-part-ux-v1"
 RUN_MODEL_SCHEMA_VERSION = "run-models-v1"
+UX_SCHEMA_VERSION = "selected-idea-context-v1"
 FINGERPRINT_FILES = (
-    "app.py", "evaluation/schemas.py", "evaluation/audit_models.py",
+    "app.py", "ux_models.py", "models.py", "gap_consolidation.py",
+    "idea_pipeline.py", "external_discovery_pipeline.py",
+    "evaluation/schemas.py", "evaluation/audit_models.py",
     "evaluation/result_audit.py", "evaluation/capabilities.py",
 )
 
@@ -59,6 +62,7 @@ def build_information(engine_mode: str = "lightweight") -> dict[str, Any]:
         or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "python_version": platform.python_version(),
         "pipeline_version": PIPELINE_VERSION,
+        "ux_schema_version": UX_SCHEMA_VERSION,
         "run_model_schema_version": RUN_MODEL_SCHEMA_VERSION,
         "evaluation_schema_version": EVALUATION_SCHEMA_VERSION,
         "engine_mode": engine_mode,
