@@ -34,7 +34,7 @@ def run_offline_part_1(app: AppTest) -> AppTest:
 
 def run_to_part_3(app: AppTest) -> AppTest:
     run_offline_part_1(app)
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     app.button(key="_continue_to_explanation").click().run(timeout=30)
     return app
@@ -68,6 +68,27 @@ def test_primary_navigation_has_exactly_three_steps_and_tools():
     assert workflow.options == [PART_1, PART_2, PART_3]
     assert "_workflow_page" not in app.session_state
     assert app.sidebar.selectbox(key="_research_tool").value == "None"
+
+
+def test_part_1_has_tiers_stable_identity_keys_and_exploratory_is_selectable():
+    app = run_offline_part_1(app_start())
+    portfolio = app.session_state["direction_portfolio_result"]
+    assert portfolio.recommended
+    assert portfolio.exploratory
+    assert 3 <= portfolio.actual_count <= 6
+    expected_keys = {
+        f"analyze_direction::{item.direction_id}"
+        for item in portfolio.all_directions
+    }
+    assert expected_keys <= {item.key for item in app.button if item.key}
+    exploratory = portfolio.exploratory[0]
+    app.button(key=f"analyze_direction::{exploratory.direction_id}").click().run(timeout=30)
+    assert app.session_state["selected_direction_id"] == exploratory.direction_id
+    assert app.session_state["selected_direction_snapshot"].portfolio_tier == "EXPLORATORY"
+    assert app.session_state["selected_gap_id"] == exploratory.selected_gap_id
+    assert app.session_state["active_primary_step"] == PART_2
+    rendered = " ".join(item.value for item in app.markdown)
+    assert "Portfolio status" in rendered and "Exploratory" in rendered
     assert not app.exception
 
 
@@ -89,7 +110,7 @@ def test_part_1_simple_setup_and_direction_cards_with_papers():
 
 def test_selecting_direction_moves_to_part_2_and_separates_evidence():
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
 
     assert app.session_state["_primary_step"] == PART_2
     assert app.session_state["selected_direction_id"]
@@ -104,7 +125,7 @@ def test_selecting_direction_moves_to_part_2_and_separates_evidence():
 
 def test_part_2_derives_operational_mechanisms_and_idea_portfolio():
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
 
     assert app.session_state["current_idea_portfolio"]
@@ -169,7 +190,7 @@ def test_part_3_result_diagrams_experiment_and_secondary_json():
 
 def test_part_2_automatically_commits_exact_primary_snapshots():
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     selection = app.session_state["primary_idea_selection_record"]
     expected = selection["selected_candidate_id"]
@@ -209,7 +230,7 @@ def test_manual_part_3_navigation_requires_automatic_primary_idea():
     assert any("Select a research direction" in item.value for item in app.warning)
 
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.radio(key="_primary_step").set_value(PART_3).run(timeout=30)
     assert app.session_state["_primary_step"] == PART_2
     assert any("No validated primary idea" in item.value for item in app.warning)
@@ -240,7 +261,7 @@ def test_hot_reload_dictionary_reconstruction_and_back_navigation_preserve_choic
 
 def test_primary_part_2_has_no_manual_selector_and_alternatives_are_collapsed():
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     assert not any(r.key == "selected_idea_choice" for r in app.radio)
     assert not any("select" in b.label.casefold() and "direction" not in b.label.casefold() for b in app.button)
@@ -250,7 +271,7 @@ def test_primary_part_2_has_no_manual_selector_and_alternatives_are_collapsed():
 
 def test_candidate_derivation_mismatch_is_rejected_before_navigation():
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     candidate = app.session_state["candidate_portfolio"][0]
     derivation = replace(
@@ -280,7 +301,7 @@ def test_candidate_derivation_mismatch_is_rejected_before_navigation():
 
 def test_selection_snapshot_round_trips_and_fingerprints_are_deterministic():
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     candidate = app.session_state["candidate_portfolio"][0]
     derivation = app.session_state["current_idea_portfolio"][0]
@@ -331,7 +352,7 @@ def test_empty_parts_are_actionable_not_blank():
 
 def test_same_direction_reuses_and_different_direction_rebuilds_external_state():
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     first = app.session_state["current_external_result"]
     first_identity = (
@@ -339,13 +360,13 @@ def test_same_direction_reuses_and_different_direction_rebuilds_external_state()
     )
 
     app.radio(key="_primary_step").set_value(PART_1).run()
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     current = app.session_state["current_external_result"]
     assert (current["parent_run_id"], current["selected_direction_id"], current["selected_gap_id"]) == first_identity
     assert app.session_state["current_idea_portfolio"]
 
     app.radio(key="_primary_step").set_value(PART_1).run()
-    app.button(key="_select_direction_1").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][1].direction_id}").click().run(timeout=30)
     assert app.session_state["current_external_result"] is None
     app.button(key="_derive_ideas").click().run(timeout=30)
     second = app.session_state["current_external_result"]
@@ -361,7 +382,7 @@ def test_same_direction_reuses_and_different_direction_rebuilds_external_state()
 
 def test_part_2_hot_reload_migrates_exact_legacy_domain_shape():
     app = run_offline_part_1(app_start())
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     external = dict(app.session_state["current_external_result"])
     legacy = dict(external["ranked_domain_selections"][0])
@@ -399,7 +420,7 @@ def test_two_distinct_directions_complete_all_three_parts():
     first_direction = first_explanation.direction_id
 
     app.radio(key="_primary_step").set_value(PART_1).run()
-    app.button(key="_select_direction_1").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][1].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     app.button(key="_continue_to_explanation").click().run(timeout=30)
 

@@ -116,7 +116,17 @@ def main() -> None:
     )
     at.button[0].click().run(timeout=30)
     assert at.session_state["current_direction_portfolio"]
-    at.button(key="_select_direction_0").click().run(timeout=30)
+    direction_result = at.session_state["direction_portfolio_result"]
+    assert 3 <= direction_result.actual_count <= 6
+    assert direction_result.recommended and direction_result.exploratory
+    assert all(item.portfolio_tier in {"RECOMMENDED", "EXPLORATORY"}
+               for item in direction_result.all_directions)
+    assert all(
+        at.button(key=f"analyze_direction::{item.direction_id}")
+        for item in direction_result.all_directions
+    )
+    first_direction_id = at.session_state["current_direction_portfolio"][0].direction_id
+    at.button(key=f"analyze_direction::{first_direction_id}").click().run(timeout=30)
     assert at.session_state["selected_direction_id"]
     at.button(key="_derive_ideas").click().run(timeout=30)
     assert at.session_state["session_state_schema_version"] == "session-state-v2"

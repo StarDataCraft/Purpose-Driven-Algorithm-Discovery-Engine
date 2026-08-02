@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from hashlib import sha1, sha256
 import json
-from typing import Any
+from typing import Any, Sequence
 
 from gap_consolidation import CanonicalGapFamily
 from models import (
@@ -178,6 +178,47 @@ class DirectionSummary:
     uncertainties: tuple[str, ...]
     selected_gap_id: str
     pipeline_version: str = PIPELINE_VERSION
+    portfolio_tier: str = "RECOMMENDED"
+    portfolio_rank: int = 0
+    direction_signature: dict[str, Any] = field(default_factory=dict)
+    selection_score: float = 0.0
+    diversity_contribution: float = 1.0
+    evidence_status: str = ""
+    exploratory_reason: str = ""
+    nearest_direction_id: str = ""
+    similarity_to_nearest_direction: float = 0.0
+    expansion_origin: str = "none"
+
+
+@dataclass(frozen=True)
+class DirectionSignature:
+    task: str
+    application_context: str
+    failure_topology: str
+    affected_algorithm_family: str
+    affected_component: str
+    gap_type: str
+    primary_metric: str
+    evidence_cluster_ids: tuple[str, ...]
+    known_solution_status: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class DirectionPortfolioResult:
+    recommended: list[DirectionSummary]
+    exploratory: list[DirectionSummary]
+    all_directions: list[DirectionSummary]
+    rejected: list[dict[str, Any]]
+    target_count: int
+    actual_count: int
+    diversity_summary: dict[str, Any]
+    expansion_attempted: bool
+    expansion_actions: list[str]
+    insufficient_choice_reason: str
+    warnings: list[str]
 
 
 @dataclass(frozen=True)
@@ -322,6 +363,174 @@ def build_direction_portfolio(
             gap.gap_id,
         ))
     return output
+
+
+def _direction_signature(
+    purpose: PurposeContract, family: CanonicalGapFamily, gap: GapSignature,
+) -> DirectionSignature:
+    return DirectionSignature(
+        task=gap.task.casefold().strip(),
+        application_context=(gap.application_context or purpose.use_case).casefold().strip(),
+        failure_topology=family.field_consensus.get("failure_topology", gap.failure_type).casefold().strip(),
+        affected_algorithm_family=gap.affected_algorithm_family.casefold().strip(),
+        affected_component=gap.affected_component.casefold().strip(),
+        gap_type=(gap.structural_gap_subtype or gap.gap_type).casefold().strip(),
+        primary_metric=gap.primary_metric.casefold().strip(),
+        evidence_cluster_ids=tuple(sorted(set(family.supporting_paper_ids))),
+        known_solution_status=("assessed" if family.known_mitigations else "no direct solution confirmed"),
+    )
+
+
+def _signature_similarity(left: DirectionSignature, right: DirectionSignature) -> float:
+    categorical = (
+        "task", "application_context", "failure_topology",
+        "affected_algorithm_family", "affected_component", "gap_type",
+        "primary_metric", "known_solution_status",
+    )
+    matches = sum(getattr(left, name) == getattr(right, name) for name in categorical)
+    a, b = set(left.evidence_cluster_ids), set(right.evidence_cluster_ids)
+    evidence_overlap = len(a & b) / len(a | b) if a or b else 1.0
+    return round((matches + evidence_overlap) / (len(categorical) + 1), 3)
+
+
+def _family_gate_reasons(
+    family: CanonicalGapFamily, gap: GapSignature, papers_by_id: dict[str, Paper],
+    *, exploratory: bool,
+) -> list[str]:
+    from gap_consolidation import promoted_gap_validation_reasons
+
+    reasons = promoted_gap_validation_reasons(gap)
+    if not family.supporting_paper_ids or not any(
+        paper_id in papers_by_id for paper_id in family.supporting_paper_ids
+    ):
+        reasons.append("no supporting paper record")
+    direct_paper_ids = {
+        paper_id for member in (family.member_gaps or [gap])
+        for paper_id, section in zip(
+            member.evidence_paper_ids, member.evidence_sections
+        ) if section != "purpose_contract" and paper_id in papers_by_id
+    }
+    if not direct_paper_ids:
+        reasons.append("no direct evidence-bearing paper")
+    if not family.unresolved_remainder.strip():
+        reasons.append("no unresolved remainder")
+    if exploratory:
+        if family.promotion_status not in {
+            "SINGLE_PAPER", "INSUFFICIENT_KNOWN_SOLUTION_SEARCH", "UNTESTABLE",
+        }:
+            reasons.append(f"ineligible exploratory status: {family.promotion_status}")
+        if family.testability < .4:
+            reasons.append("testability below exploratory threshold")
+    elif family.promotion_status != "PROMOTED":
+        reasons.append("did not pass full promotion gates")
+    return list(dict.fromkeys(reasons))
+
+
+def _quality_score(family: CanonicalGapFamily, gap: GapSignature) -> float:
+    support = min(1.0, family.empirical_support_count / 3)
+    source = min(1.0, family.independent_source_count / 2)
+    binding = gap.evidence_strength_components.get("algorithm_binding", 0.0)
+    remainder = 1.0 if family.unresolved_remainder else 0.0
+    return round(
+        .24 * gap.confidence_score + .2 * family.testability + .18 * support
+        + .12 * source + .14 * binding + .12 * remainder, 4,
+    )
+
+
+def build_tiered_direction_portfolio(
+    *, run_id: str, purpose: PurposeContract,
+    promoted_families: Sequence[CanonicalGapFamily],
+    exploratory_families: Sequence[CanonicalGapFamily],
+    gaps: Sequence[GapSignature], papers: Sequence[Paper],
+    preferred_count: int = 4, minimum_count: int = 3,
+    maximum_count: int = 6,
+) -> DirectionPortfolioResult:
+    """Build a bounded, deterministic, evidence-gated quality-diversity set."""
+    by_gap = {gap.gap_id: gap for gap in gaps}
+    by_paper = {paper.paper_id: paper for paper in papers}
+    rejected: list[dict[str, Any]] = []
+
+    def candidates(families: Sequence[CanonicalGapFamily], tier: str):
+        eligible = []
+        for family in families:
+            gap = by_gap.get(family.representative_gap_id)
+            reasons = ["representative gap missing"] if gap is None else _family_gate_reasons(
+                family, gap, by_paper, exploratory=tier == "EXPLORATORY",
+            )
+            if reasons:
+                rejected.append({"family_id": family.family_id, "tier": tier, "reasons": reasons})
+                continue
+            eligible.append((family, gap, _direction_signature(purpose, family, gap), _quality_score(family, gap)))
+        return sorted(eligible, key=lambda item: (-item[3], item[0].family_id))
+
+    recommended_pool = candidates(promoted_families, "RECOMMENDED")
+    selected: list[tuple[Any, ...]] = []
+
+    def add_diverse(pool, limit):
+        while pool and len(selected) < limit:
+            ranked = []
+            for item in pool:
+                similarities = [
+                    (_signature_similarity(item[2], prior[2]), prior[0].family_id)
+                    for prior in selected
+                ]
+                nearest = max(similarities, default=(0.0, ""))
+                contribution = round(1.0 - nearest[0], 3)
+                ranked.append((item[3] + .25 * contribution, contribution, nearest, item))
+            ranked.sort(key=lambda row: (-row[0], row[3][0].family_id))
+            _, contribution, nearest, winner = ranked[0]
+            pool.remove(winner)
+            if selected and contribution < .1:
+                rejected.append({"family_id": winner[0].family_id, "tier": "DUPLICATE", "reasons": [f"near-duplicate of {nearest[1]}"]})
+                continue
+            selected.append((*winner, contribution, nearest))
+
+    add_diverse(recommended_pool, min(4, maximum_count))
+    recommended_count = len(selected)
+    expansion_attempted = recommended_count < minimum_count
+    expansion_actions = []
+    if expansion_attempted:
+        expansion_actions.append("Evaluated coherent families that narrowly missed promotion once")
+    if recommended_count < preferred_count:
+        exploratory_pool = candidates(exploratory_families, "EXPLORATORY")
+        add_diverse(exploratory_pool, min(preferred_count, maximum_count))
+
+    summaries: list[DirectionSummary] = []
+    for rank, item in enumerate(selected, 1):
+        family, gap, signature, score, contribution, nearest = item
+        tier = "RECOMMENDED" if rank <= recommended_count else "EXPLORATORY"
+        base = build_direction_portfolio(run_id, purpose, [family], list(gaps), list(papers), 1)[0]
+        exploratory_reason = ""
+        if tier == "EXPLORATORY":
+            exploratory_reason = "; ".join(family.rejection_reasons) or "Evidence did not pass every recommendation gate."
+        summaries.append(DirectionSummary(
+            **{**asdict(base),
+               "portfolio_tier": tier, "portfolio_rank": rank,
+               "direction_signature": signature.to_dict(), "selection_score": score,
+               "diversity_contribution": contribution,
+               "evidence_status": "full evidence gates passed" if tier == "RECOMMENDED" else "bounded exploratory evidence",
+               "exploratory_reason": exploratory_reason,
+               "nearest_direction_id": nearest[1], "similarity_to_nearest_direction": nearest[0],
+               "expansion_origin": "none" if tier == "RECOMMENDED" else "bounded exploratory expansion"}
+        ))
+    recommended = [item for item in summaries if item.portfolio_tier == "RECOMMENDED"]
+    exploratory = [item for item in summaries if item.portfolio_tier == "EXPLORATORY"]
+    dimensions = {
+        name: len({str(item.direction_signature.get(name, "")) for item in summaries})
+        for name in ("failure_topology", "affected_component", "affected_algorithm_family", "gap_type", "primary_metric")
+    }
+    level = "high" if sum(value > 1 for value in dimensions.values()) >= 3 else "medium" if len(summaries) > 1 else "limited"
+    insufficient = ""
+    if len(summaries) < minimum_count:
+        insufficient = (
+            f"Only {len(summaries)} defensible direction(s) passed the current evidence and coherence gates after bounded expansion."
+        )
+    return DirectionPortfolioResult(
+        recommended, exploratory, summaries, rejected, preferred_count,
+        len(summaries), {"level": level, "dimensions": dimensions},
+        expansion_attempted, expansion_actions, insufficient,
+        [insufficient] if insufficient else [],
+    )
 
 
 def build_idea_derivation(

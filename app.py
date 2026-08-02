@@ -56,7 +56,7 @@ from run_models import utc_now
 from result_explanation import research_result
 from ux_models import (
     PIPELINE_VERSION, SELECTED_IDEA_SCHEMA_VERSION, SelectedIdeaContext,
-    build_direction_portfolio, build_idea_derivation, build_idea_explanation,
+    build_tiered_direction_portfolio, build_idea_derivation, build_idea_explanation,
     candidate_from_dict, candidate_modification, candidate_to_dict,
     derivation_from_dict, derivation_to_dict, direction_from_dict,
     direction_to_dict, gap_from_dict, gap_to_dict, selected_idea_fingerprints,
@@ -234,6 +234,7 @@ def initialize_state() -> None:
         "promoted_gaps": [], "exploratory_gaps": [],
         "current_purpose_contract": None,
         "current_direction_portfolio": [],
+        "direction_portfolio_result": None,
         "selected_direction_id": "",
         "selected_direction_snapshot": None,
         "selected_gap_family_id": "",
@@ -421,7 +422,8 @@ def invalidate_downstream_for_purpose() -> None:
         "mechanisms": [], "rejected_mechanisms": [], "alignments": [],
         "direction_families": [], "candidate_portfolio": [],
         "external_search_diagnostics": None, "current_external_run": None,
-        "current_direction_portfolio": [], "selected_direction_id": "",
+        "current_direction_portfolio": [], "direction_portfolio_result": None,
+        "selected_direction_id": "",
         "selected_direction_snapshot": None, "selected_gap_family_id": "",
         "current_idea_portfolio": [], "selected_idea_id": "",
         "selected_candidate_snapshot": None,
@@ -2093,12 +2095,15 @@ def execute_direction_search(
     record_discovery_stages(run, discovery)
     run.structural_gap_count = len(discovery.gaps)
     generate_quality_warnings(run)
-    portfolio = build_direction_portfolio(
-        run.run_id, purpose, discovery.consolidation.promoted,
-        discovery.gaps, discovery.papers,
+    portfolio_result = build_tiered_direction_portfolio(
+        run_id=run.run_id, purpose=purpose,
+        promoted_families=discovery.consolidation.promoted,
+        exploratory_families=discovery.consolidation.exploratory,
+        gaps=discovery.gaps, papers=discovery.papers,
     )
     st.session_state.current_research_run = run
-    st.session_state.current_direction_portfolio = portfolio
+    st.session_state.current_direction_portfolio = portfolio_result.all_directions
+    st.session_state.direction_portfolio_result = portfolio_result
     st.session_state.algorithm_bindings = bindings
     st.session_state.problem_query_audit = broad_audit
     st.session_state.focused_query_audit = focused_audit
@@ -2114,7 +2119,7 @@ def select_direction(direction_id: str) -> None:
     if st.session_state.selected_direction_id != direction_id:
         invalidate_downstream_for_gap()
     gap = next(
-        item for item in st.session_state.promoted_gaps
+        item for item in st.session_state.gaps
         if item.gap_id == direction.selected_gap_id
     )
     st.session_state.selected_direction_id = direction_id
@@ -2674,34 +2679,79 @@ def discover_directions_page() -> None:
                     "reason": "; ".join(item.rejection_reasons),
                 } for item in st.session_state.exploratory_gap_families])
         return
+    portfolio = st.session_state.direction_portfolio_result
     st.header("Promising research directions / 候选研究方向")
-    for index, direction in enumerate(directions):
+    if portfolio:
+        summary_columns = st.columns(5)
+        summary_columns[0].metric("Recommended", len(portfolio.recommended))
+        summary_columns[1].metric("Exploratory", len(portfolio.exploratory))
+        summary_columns[2].metric("Evidence-bearing papers", len({
+            paper_id for item in directions for paper_id in item.evidence_paper_ids
+        }))
+        summary_columns[3].metric(
+            "Canonical families", len(st.session_state.canonical_gap_families)
+        )
+        summary_columns[4].metric(
+            "Choice-set diversity", portfolio.diversity_summary["level"]
+        )
+        if portfolio.insufficient_choice_reason:
+            st.warning(
+                "Only one defensible direction passed the current evidence gates."
+                if portfolio.actual_count == 1 else portfolio.insufficient_choice_reason
+            )
+            with st.expander("Why the choice set is limited"):
+                render_fields({
+                    "Promoted families considered": len(st.session_state.promoted_gap_families),
+                    "Exploratory families considered": len(st.session_state.exploratory_gap_families),
+                    "Expansion attempted": "Yes" if portfolio.expansion_attempted else "No",
+                    "Expansion actions": portfolio.expansion_actions,
+                    "Rejection reasons": [reason for item in portfolio.rejected for reason in item["reasons"]],
+                    "How to obtain more alternatives": "Broaden the publication range or task wording; include another source; reduce an overly narrow algorithm restriction.",
+                })
+
+    def render_direction_card(direction: object) -> None:
         with st.container(border=True):
+            st.markdown(
+                "**Recommended direction / 推荐方向**"
+                if direction.portfolio_tier == "RECOMMENDED"
+                else "**Exploratory direction / 探索性方向**"
+            )
             st.subheader(direction.title)
             st.write(direction.plain_language_summary)
+            if direction.portfolio_tier == "EXPLORATORY":
+                st.warning(f"Why exploratory: {direction.exploratory_reason}")
             render_fields({
                 "Task": direction.task,
                 "Failure condition": direction.failure_condition,
                 "Algorithm family": direction.affected_algorithm_family,
-                "Gap types": ", ".join(direction.gap_types),
-                "Why it matters": direction.unresolved_remainder,
+                "Affected component": direction.direction_signature.get("affected_component", ""),
                 "Primary metric": direction.primary_metric,
                 "Evidence papers": direction.evidence_bearing_paper_count,
                 "Independent sources": direction.independent_source_count,
-                "Known solutions": direction.known_solution_status,
+                "Existing approaches": readable_items(direction.current_solution_families) or direction.known_solution_status,
+                "Unresolved remainder": direction.unresolved_remainder,
                 "Confidence": round(direction.evidence_confidence, 2),
-                "Risk": direction.risk_level,
-                "Uncertainty": readable_items(direction.uncertainties),
+                "Main uncertainty": readable_items(direction.uncertainties),
             })
             with st.expander("View related papers / 查看相关论文"):
                 render_related_papers(direction)
             st.button(
                 "Analyze this direction / 分析这个方向",
-                key=f"_select_direction_{index}",
+                key=f"analyze_direction::{direction.direction_id}",
                 type="primary",
                 on_click=select_direction,
                 args=(direction.direction_id,),
             )
+
+    recommended = portfolio.recommended if portfolio else directions
+    exploratory = portfolio.exploratory if portfolio else []
+    st.subheader("Recommended directions / 推荐方向")
+    for direction in recommended:
+        render_direction_card(direction)
+    if exploratory:
+        st.subheader("Exploratory alternatives / 探索性方向")
+        for direction in exploratory:
+            render_direction_card(direction)
 
 
 def build_current_idea_portfolio(progress_callback: object | None = None) -> None:
@@ -2837,6 +2887,9 @@ def analyze_gap_page() -> None:
     st.header("Selected direction / 已选方向")
     render_fields({
         "Direction": direction.title,
+        "Portfolio status": direction.portfolio_tier.title(),
+        "Evidence status": direction.evidence_status,
+        "Exploratory limitation": direction.exploratory_reason or "None",
         "Problem": direction.plain_language_summary,
         "Evidence papers": direction.evidence_bearing_paper_count,
         "Algorithm family": direction.affected_algorithm_family,

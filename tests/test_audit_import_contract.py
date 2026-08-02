@@ -124,7 +124,7 @@ assert app.title[0].value == "Discover directions / 发现方向"
 app.radio(key="_purpose_search_mode").set_value("Offline demonstration fixtures")
 app.button[0].click().run(timeout=30)
 assert app.session_state["current_direction_portfolio"]
-app.button(key="_select_direction_0").click().run(timeout=30)
+app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
 assert app.session_state["selected_direction_id"]
 app.button(key="_derive_ideas").click().run(timeout=30)
 assert app.session_state["current_idea_portfolio"]

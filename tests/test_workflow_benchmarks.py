@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -42,14 +43,14 @@ def test_purpose_reaches_part_3_without_candidate_selection(
 
     directions = app.session_state["current_direction_portfolio"]
     assert directions
-    assert all(len(item.title.split()) >= 4 for item in directions)
+    assert all(len(re.findall(r"\w+", item.title)) >= 4 for item in directions)
     assert all(item.affected_algorithm_family.casefold() not in {
         "", "unknown", "unspecified",
     } for item in directions)
     assert directions[0].affected_algorithm_family == expected_family
     assert directions[0].primary_metric == metric
 
-    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     selection = app.session_state["primary_idea_selection_record"]
     assert selection["status"] == "SELECTED"

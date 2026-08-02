@@ -139,7 +139,9 @@ def _failure_topology(gap: GapSignature) -> str:
     for label, terms in {
         "recurrence_recovery": ("recurr", "return", "reactivat"),
         "missingness_shift": ("missing", "feature availability", "mnar"),
-        "component_lifecycle": ("birth", "death", "split", "merge", "component"),
+        "component_birth_death": ("birth", "death", "split", "merge"),
+        "component_redundancy": ("redundan", "stale centroid", "retire"),
+        "component_lifecycle": ("component",),
         "distribution_shift": ("drift", "distribution shift", "regime"),
         "initialization": ("initialization",),
         "calibration": ("calibration",),
