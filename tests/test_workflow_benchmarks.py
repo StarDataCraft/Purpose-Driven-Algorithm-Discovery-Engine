@@ -26,7 +26,7 @@ OFFLINE = "Offline demonstration fixtures"
      "detect cluster birth and death", "cluster birth detection delay",
      "clustering"),
 ])
-def test_purpose_reaches_part_3_without_candidate_selection(
+def test_purpose_reaches_maturity_aware_part_3(
     task, data, failure, improvement, metric, expected_family,
 ):
     app = AppTest.from_file(str(APP), default_timeout=30).run()
@@ -54,14 +54,19 @@ def test_purpose_reaches_part_3_without_candidate_selection(
     app.button(key="_derive_ideas").click().run(timeout=30)
     selection = app.session_state["primary_idea_selection_record"]
     assert not any(item.key == "selected_idea_choice" for item in app.radio)
-    if selection["status"] == "SELECTED":
+    if selection["status"] in {"SELECTED", "EXPLORATORY_AVAILABLE"}:
         assert app.session_state["selected_idea_context"]
         assert app.session_state["selected_idea_id"] == selection["selected_candidate_id"]
         app.button(key="_continue_to_explanation").click().run(timeout=30)
         assert app.session_state["current_result_explanation"].candidate_id == selection["selected_candidate_id"]
+        if selection["status"] == "EXPLORATORY_AVAILABLE":
+            assert any("Exploratory hypothesis" in item.value for item in app.warning)
     else:
-        assert selection["status"] == "NO_CANDIDATE_PASSED"
+        assert selection["status"] == "NO_COHERENT_IDEA"
         assert not app.session_state["selected_idea_id"]
         assert selection["rejection_reasons"]
-        assert any("No defensible primary idea" in item.value for item in app.error)
+        assert any("No coherent research hypothesis" in item.value for item in app.error)
+    assert sum(selection["maturity_distribution"].values()) == len(
+        app.session_state["candidate_portfolio"]
+    )
     assert not app.exception

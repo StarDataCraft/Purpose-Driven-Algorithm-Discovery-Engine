@@ -12,6 +12,7 @@ from mechanism_mining import cross_domain_only, extract_mechanisms
 from models import AlignmentResult, GapSignature, MechanismSignature, Paper, PurposeContract
 from openalex_client import default_query_budget, get_openalex_client
 from paper_fetchers import deduplicate_papers
+from pipeline_quality import apply_external_problem_relevance
 from query_generation import (
     CrossDomainProblemSignature, DomainSelection, generate_external_queries,
     normalize_cross_domain_problem, normalize_domain_selection, select_external_domains,
@@ -283,6 +284,12 @@ def discover_external_mechanisms_for_direction(
         if indices and indices[0] < len(query_pairs):
             paper.domain = query_pairs[indices[0]][0]
 
+    # Retrieval initially receives the ML purpose for API/window configuration.
+    # Re-score the returned cross-domain corpus against its normalized external
+    # problem topology before calling any paper mechanism-bearing evidence.
+    apply_external_problem_relevance(papers, signature)
+    retrieval_run.finalize_from_papers(papers)
+
     if requested_mode == "CACHE" and not papers:
         errors.append(
             "No matching cached external evidence was found. Run a live "
@@ -313,9 +320,13 @@ def discover_external_mechanisms_for_direction(
         errors.append("Mechanisms were extracted, but no structural alignment passed hard validation.")
 
     retrieved_paper_ids = {paper.paper_id for paper in papers}
-    mechanism_paper_ids = {
+    relevant_paper_ids = {
+        paper.paper_id for paper in papers
+        if paper.estimated_relevance_label in {"ESTIMATED_HIGH", "ESTIMATED_MEDIUM"}
+    }
+    mechanism_paper_ids = ({
         paper_id for mechanism in mechanisms for paper_id in mechanism.evidence_paper_ids
-    } & retrieved_paper_ids
+    } & retrieved_paper_ids & relevant_paper_ids)
     if (retrieval_run.automatically_relevant_paper_count == 0
             and mechanism_paper_ids):
         warnings.append(

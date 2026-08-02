@@ -59,6 +59,37 @@ def apply_estimated_relevance(
     return papers
 
 
+def apply_external_problem_relevance(papers: list[Paper], signature: object) -> list[Paper]:
+    """Score cross-domain papers against problem topology, never ML vocabulary."""
+    topology = " ".join(str(getattr(signature, field, "")) for field in (
+        "system_condition", "observed_failure", "desired_capability",
+        "memory_requirement", "resource_constraint",
+    )).casefold()
+    concepts = {
+        "recurrence": ("recurr", "repeat", "return", "reactivat", "histor"),
+        "state retention": ("state", "memory", "retain", "archive", "store"),
+        "recognition": ("recogn", "detect", "identify", "classif"),
+        "response latency": ("latency", "delay", "recovery", "response time"),
+        "bounded resources": ("bounded", "limited", "capacity", "resource", "budget"),
+        "disturbance": ("disturb", "shift", "change", "perturb", "transition"),
+    }
+    required = [terms for label, terms in concepts.items()
+                if label in topology or any(term in topology for term in terms)]
+    if not required:
+        required = list(concepts.values())
+    for paper in papers:
+        text = f"{paper.title} {paper.abstract}".casefold()
+        matches = sum(any(term in text for term in variants) for variants in required)
+        score = min(1.0, matches / max(2, len(required)))
+        paper.estimated_relevance_score = round(score, 4)
+        paper.estimated_relevance_label = (
+            "ESTIMATED_HIGH" if score >= .7 else
+            "ESTIMATED_MEDIUM" if score >= .4 else
+            "ESTIMATED_LOW" if score >= .2 else "ESTIMATED_IRRELEVANT"
+        )
+    return papers
+
+
 def warning(
     stage: str, code: str, title: str, explanation: str,
     observed: object, expected: str, action: str, severity: str = "warning",

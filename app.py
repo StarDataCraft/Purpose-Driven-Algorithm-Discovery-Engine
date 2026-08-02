@@ -2504,17 +2504,23 @@ def render_workflow_status() -> None:
     ready = validate_selected_idea_state() in {"COMPLETE", "LEGACY_CONTEXT"}
     st.subheader("Workflow status / 流程状态")
     selection = st.session_state.primary_idea_selection_record or {}
+    selection_status = selection.get("status")
+    exploratory = selection_status == "EXPLORATORY_AVAILABLE"
     columns = st.columns(6)
     columns[0].metric("Research direction", "selected" if st.session_state.selected_direction_id else "not selected")
     columns[1].metric("External evidence", "ready" if st.session_state.current_external_result else "not ready")
     columns[2].metric(
         "Candidate ideas",
-        f"{len(ideas)} evaluated internally" if ideas else "0 passed validation",
+        f"{len(ideas)} assessed" if ideas else "0 assessed",
     )
     columns[3].metric("Primary idea", selected_idea_name())
-    columns[4].metric("Selection", "automatic" if selection.get("status") == "SELECTED" else "not available")
+    columns[4].metric(
+        "Selection", "primary hypothesis" if selection_status == "SELECTED"
+        else "exploratory only" if exploratory else "not available",
+    )
     columns[5].metric(
-        "Part 3", "ready" if ready else "unavailable — no defensible idea",
+        "Part 3", "exploratory explanation" if ready and exploratory
+        else "ready" if ready else "unavailable — no coherent idea",
     )
     violations = selected_idea_invariant_violations()
     if violations:
@@ -2551,8 +2557,15 @@ def render_primary_idea_summary() -> None:
         return
     candidate = candidates[selected_id]
     derivation = derivations[selected_id]
-    st.header("Primary idea derived / 已推导主想法")
+    science = record.get("scientific_gate_results", {}).get(selected_id, {})
+    maturity = science.get("maturity_level", "RESEARCH_WORTHY_HYPOTHESIS")
+    exploratory = record.get("status") == "EXPLORATORY_AVAILABLE"
+    st.header(
+        "Exploratory hypothesis — not promoted / 探索性假设"
+        if exploratory else "Primary research hypothesis / 主要研究假设"
+    )
     render_fields({
+        "Idea maturity / 想法成熟度": maturity.replace("_", " ").title(),
         "Title": candidate.candidate_name,
         "Why this idea was selected": record.get("selection_reason", "Selected by deterministic hard-gated ranking."),
         "Starting algorithm": candidate.base_algorithm,
@@ -2564,6 +2577,10 @@ def render_primary_idea_summary() -> None:
         "Main risk": candidate.expected_failure_modes[0]
         if candidate.expected_failure_modes else "unknown",
         "Confidence": record.get("confidence", candidate.confidence),
+        "What remains open": [
+            item.get("issue", "") for item in science.get("maturity_limiters", [])
+        ],
+        "What would upgrade this idea": science.get("repair_options", []),
     })
     if st.button(
         "Continue to explanation / 查看完整解释",
@@ -3021,7 +3038,7 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
     )
     request.validate()
     selection = primary_selector.select_primary_idea(request)
-    if selection.status != "SELECTED" and not recovery_used:
+    if selection.status in {"NO_CANDIDATES", "NO_COHERENT_IDEA"} and not recovery_used:
         st.session_state.automatic_recovery_attempted = True
         run.search_policy = SearchPolicy(
             requested_mode=policy.requested_mode,
@@ -3036,7 +3053,7 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
         st.session_state.candidate_portfolio = []
         return build_current_idea_portfolio(progress_callback)
     st.session_state.primary_idea_selection_record = selection.to_dict()
-    if selection.status == "SELECTED":
+    if selection.status in {"SELECTED", "EXPLORATORY_AVAILABLE"}:
         commit_idea_selection(
             candidate=selection.selected_candidate,
             derivation=selection.selected_derivation,
@@ -3241,9 +3258,9 @@ def analyze_gap_page() -> None:
             })
     ideas = st.session_state.current_idea_portfolio
     selection = st.session_state.primary_idea_selection_record or {}
-    if ideas and selection and selection.get("status") != "SELECTED":
+    if ideas and selection and selection.get("status") == "NO_COHERENT_IDEA":
         diagnostics = st.session_state.candidate_run_diagnostics or {}
-        st.error("No defensible primary idea was derived.")
+        st.error("No coherent research hypothesis was derived.")
         records = selection.get("ranking_records", [])
         strongest = max(
             records, key=lambda item: item.get("weighted_score", 0), default={},
@@ -3253,7 +3270,7 @@ def analyze_gap_page() -> None:
         }
         strongest_candidate = candidates_by_id.get(strongest.get("candidate_id"))
         render_fields({
-            "Automatic evaluation": "No candidate passed all mandatory gates",
+            "Automatic evaluation": "Every candidate had a fatal scientific failure",
             "Candidates generated": len(st.session_state.candidate_portfolio),
             "Candidates rejected": len(selection.get("rejected_candidate_ids", [])),
             "Gate failure counts": diagnostics.get("gate_failure_counts", {}),
@@ -3262,21 +3279,18 @@ def analyze_gap_page() -> None:
             "Bounded recovery attempted": "Yes" if diagnostics.get("automatic_recovery_attempted") else "No",
         })
         if strongest_candidate:
-            st.subheader("Exploratory concept — not promoted")
+            st.subheader("Strongest rejected concept")
             render_fields({
                 "Title": strongest_candidate.candidate_name,
                 "Why not promoted": strongest.get("gate_failures", []),
-                "What would make it eligible": (
-                    "Obtain direct evidence, resolve prior art, define all information "
-                    "and algorithm actions, and pass structural and matched-compute tests."
-                ),
+                "What would make it eligible": "Resolve every listed fatal failure without inventing unsupported facts.",
             })
         return
     if not ideas:
         diagnostics = st.session_state.candidate_run_diagnostics or {}
         selection = st.session_state.primary_idea_selection_record or {}
         if selection:
-            st.error("No defensible primary idea was derived.")
+            st.error("No coherent research hypothesis was derived.")
             render_fields({
                 "External papers": diagnostics.get("paper_count", 0),
                 "Valid mechanisms": diagnostics.get("mechanism_count", 0),
@@ -3596,6 +3610,32 @@ def explain_idea_page() -> None:
         "Back to gap analysis / 返回 Gap 分析",
         on_click=navigate_to, args=(PRIMARY_STEPS[1],),
     )
+    selection_record = st.session_state.primary_idea_selection_record or {}
+    assessment = selection_record.get("scientific_gate_results", {}).get(
+        candidate.candidate_id, {}
+    )
+    maturity = assessment.get("maturity_level", "RESEARCH_WORTHY_HYPOTHESIS")
+    if selection_record.get("status") == "EXPLORATORY_AVAILABLE":
+        st.warning("Exploratory hypothesis — not promoted")
+    else:
+        st.success("Primary research hypothesis")
+    st.header("Idea maturity / 想法成熟度")
+    st.subheader(maturity.replace("_", " ").title())
+    render_fields({
+        "Why this maturity": assessment.get("maturity_reason", selection_record.get("selection_reason", "Not recorded")),
+        "What is already specified": assessment.get("strengths", []),
+        "What remains open": [
+            item.get("issue", "") for item in assessment.get("maturity_limiters", [])
+        ],
+        "What would upgrade this idea": assessment.get("repair_options", []),
+        "Bounded repairs applied": [
+            item.get("repair", "") for item in assessment.get("repairs_applied", [])
+        ],
+    })
+    open_choices = assessment.get("open_design_choices", [])
+    if open_choices:
+        with st.expander("Open design choices / 开放设计变量"):
+            st.dataframe(open_choices, use_container_width=True)
     if st.session_state.current_result_explanation is None:
         render_started = time.perf_counter()
         diagram_started = time.perf_counter()

@@ -20,9 +20,9 @@ from primary_idea_selection import (
     select_primary_idea_legacy as select_primary_idea,
     select_primary_idea_with_recovery,
 )
-from models import Paper
+from models import Paper, PurposeContract
 from scientific_validation import (
-    DIRECT_FAILURE_EVIDENCE, IRRELEVANT, build_modification_spec,
+    DIRECT_FAILURE_EVIDENCE, IRRELEVANT, IdeaMaturityLevel, build_modification_spec,
     classify_paper_roles, evidence_count_invariants,
     validate_candidate_for_promotion,
 )
@@ -30,8 +30,26 @@ from run_models import ResearchRun
 from ux_models import build_direction_portfolio
 
 
-@pytest.fixture
-def selection_case(tmp_path_factory, purpose, ml_papers, external_papers):
+@pytest.fixture(scope="module")
+def selection_case(tmp_path_factory):
+    purpose = PurposeContract(
+        "p1", "user", "adaptive decision support", "online learning", "tabular streams",
+        "recurring concept drift", "reduce recovery time", "average online accuracy",
+        ["recovery time", "memory use"], ["stable-regime accuracy"],
+        available_training_information=["features", "delayed outcome feedback"],
+        available_inference_information=[
+            "input features", "prediction residual", "regime similarity",
+            "observable deviation", "outcome feedback", "component overlap",
+            "observable outputs", "order parameter",
+        ], allowed_algorithm_families=["ensemble"],
+    )
+    root = Path(__file__).parents[1]
+    ml_papers = [Paper(**item) for item in json.loads(
+        (root / "data/offline_fixtures/ml_papers.json").read_text()
+    )]
+    external_papers = [Paper(**item) for item in json.loads(
+        (root / "data/offline_fixtures/external_papers.json").read_text()
+    )]
     discovery = discover_structural_gaps(ml_papers, purpose)
     run = ResearchRun.create(
         purpose.purpose_id, "LIVE", "lightweight", purpose.publication_window,
@@ -210,13 +228,18 @@ def test_predictive_random_forest_regression_cannot_be_primary(selection_case, p
         gap=gap, parent_run=run, purpose=purpose, papers=papers,
         full_audits={candidate.candidate_id: audit},
     )
-    assert result.status == "NO_CANDIDATE_PASSED"
+    assert result.status == "NO_COHERENT_IDEA"
     assert not result.selected_candidate_id
     reasons = result.rejection_reasons[candidate.candidate_id]
-    assert any("full audit rejected" in item for item in reasons)
-    assert any("generic Random Forest" in item for item in reasons)
-    assert any("undefined symbol" in item for item in reasons)
-    assert any("true-label residual" in item for item in reasons)
+    assert any(
+        "full audit" in item["issue"]
+        for item in result.scientific_gate_results[candidate.candidate_id]["maturity_limiters"]
+    )
+    assert any("metaphor-only" in item for item in reasons)
+    assert any(
+        "delayed-feedback" in item["repair"]
+        for item in result.scientific_gate_results[candidate.candidate_id]["repairs_applied"]
+    )
     assert any("expert activation" in item for item in reasons)
 
 
@@ -240,7 +263,7 @@ def test_surface_similarity_and_undefined_formula_fail(selection_case, purpose):
         gap=gap, purpose=purpose, papers=papers, full_audit=audit,
     )
     assert not result.passed
-    assert any("structural_alignment_quality" in item for item in result.failures)
+    assert any("metaphor-only" in item for item in result.fatal_failures)
     assert build_modification_spec(candidate, derivation).unresolved_implementation_choices
 
 
@@ -265,3 +288,90 @@ def test_missing_human_review_remains_visible_without_changing_direct_role(
     direct = next(item for item in roles if item.paper_id == papers[0].paper_id)
     assert direct.role == DIRECT_FAILURE_EVIDENCE
     assert direct.human_review_status == "NOT_REVIEWED"
+
+
+def _calibrated_case(selection_case, purpose):
+    candidate, derivation, gap, papers, _ = _invalid_predictive_case(selection_case, purpose)
+    candidate.base_algorithm = "Adaptive online tree ensemble"
+    candidate.base_algorithm_family = "online tree ensemble"
+    candidate.alignment_acceptance = "STRONG"
+    candidate.update_rule_delta = "After delayed feedback, update bounded per-tree reliability state and adjust ensemble weights."
+    candidate.new_state_variables = ["bounded per-tree reliability", "regime-state estimate"]
+    candidate.required_inference_information = ["current predictions"]
+    candidate.required_training_information = ["delayed feedback labels"]
+    candidate.expected_improvement = "reactivate reliable prior regime state to reduce recovery time after recurrence"
+    candidate.novelty_status = "INSUFFICIENT_SEARCH"
+    candidate.minimal_experiment.metrics = ["recovery time"]
+    derivation = replace(
+        derivation,
+        structural_correspondences=("retained state maps to bounded ensemble reliability state",),
+        mechanism_response="reactivate retained prior regime state after recurrence recognition",
+    )
+    papers[0].abstract = "Online learning under recurring concept drift shows slow recovery following recurrence."
+    audit = SimpleNamespace(final_decision="PASS", audit_dimensions=[])
+    return candidate, derivation, gap, papers, audit
+
+
+def test_maturity_rejects_surface_word_overlap(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _invalid_predictive_case(selection_case, purpose)
+    result = validate_candidate_for_promotion(
+        candidate=candidate, derivation=derivation, direction=selection_case[1],
+        gap=gap, purpose=purpose, papers=papers, full_audit=audit,
+    )
+    assert result.maturity_level == IdeaMaturityLevel.REJECTED
+    assert any("metaphor-only" in item for item in result.fatal_failures)
+
+
+def test_abstract_only_coherent_candidate_is_exploratory(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _calibrated_case(selection_case, purpose)
+    papers[0].title = "Short online classification survey"
+    papers[0].abstract = "A short abstract about online classification."
+    result = validate_candidate_for_promotion(
+        candidate=candidate, derivation=derivation, direction=selection_case[1],
+        gap=gap, purpose=purpose, papers=papers, full_audit=audit,
+    )
+    assert result.maturity_level == IdeaMaturityLevel.EXPLORATORY_HYPOTHESIS
+    assert not result.fatal_failures
+
+
+def test_family_level_testable_candidate_is_research_worthy(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _calibrated_case(selection_case, purpose)
+    result = validate_candidate_for_promotion(
+        candidate=candidate, derivation=derivation, direction=selection_case[1],
+        gap=gap, purpose=purpose, papers=papers, full_audit=audit,
+    )
+    assert result.maturity_level == IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS
+    assert any("prior-art" in item.issue for item in result.maturity_limiters)
+
+
+def test_fully_specified_candidate_is_test_ready(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _calibrated_case(selection_case, purpose)
+    candidate.novelty_status = "targeted search complete; no duplicate found"
+    result = validate_candidate_for_promotion(
+        candidate=candidate, derivation=derivation, direction=selection_case[1],
+        gap=gap, purpose=purpose, papers=papers, full_audit=audit,
+    )
+    assert result.maturity_level == IdeaMaturityLevel.TEST_READY_PROPOSAL
+
+
+def test_impossible_information_is_fatal_without_delayed_or_proxy_path(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _calibrated_case(selection_case, purpose)
+    candidate.required_inference_information = ["true label residual"]
+    candidate.required_training_information = []
+    immediate_only = replace(purpose, available_inference_information=["features", "current predictions"])
+    result = validate_candidate_for_promotion(
+        candidate=candidate, derivation=derivation, direction=selection_case[1],
+        gap=gap, purpose=immediate_only, papers=papers, full_audit=audit,
+    )
+    assert result.maturity_level == IdeaMaturityLevel.REJECTED
+    assert any("no delayed/proxy" in item for item in result.fatal_failures)
+
+
+def test_no_human_review_is_not_a_fatal_gate(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _calibrated_case(selection_case, purpose)
+    papers[0].reviewed_relevance_label = ""
+    result = validate_candidate_for_promotion(
+        candidate=candidate, derivation=derivation, direction=selection_case[1],
+        gap=gap, purpose=purpose, papers=papers, full_audit=audit,
+    )
+    assert not any("human review" in item for item in result.fatal_failures)

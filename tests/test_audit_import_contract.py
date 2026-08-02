@@ -128,14 +128,12 @@ app.button(key=f"analyze_direction::{app.session_state['current_direction_portfo
 assert app.session_state["selected_direction_id"]
 app.button(key="_derive_ideas").click().run(timeout=30)
 assert app.session_state["current_idea_portfolio"]
-assert not app.session_state["selected_idea_id"]
-assert app.session_state["primary_idea_selection_record"]["status"] == "NO_CANDIDATE_PASSED"
-assert app.session_state["current_result_explanation"] is None
+assert app.session_state["selected_idea_id"]
+assert app.session_state["primary_idea_selection_record"]["status"] in {"SELECTED", "EXPLORATORY_AVAILABLE"}
 visible = " ".join(str(item.value) for group in (app.warning, app.info, app.error) for item in group)
-assert "No defensible primary idea" in visible
 assert "Traceback" not in visible
 assert not app.exception
-print("degraded three-part workflow: OK")
+print("degraded three-part workflow retains maturity-calibrated result: OK")
 '''
     environment = dict(os.environ)
     environment["RESULT_AUDIT_FORCE_IMPORT_ERROR"] = "1"
@@ -144,4 +142,4 @@ print("degraded three-part workflow: OK")
         capture_output=True, text=True, timeout=90,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "degraded three-part workflow: OK" in completed.stdout
+    assert "degraded three-part workflow retains maturity-calibrated result: OK" in completed.stdout

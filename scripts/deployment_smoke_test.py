@@ -147,14 +147,13 @@ def main() -> None:
     assert len(at.session_state["current_idea_portfolio"]) >= 2
     selection = at.session_state["primary_idea_selection_record"]
     assert not any(item.key == "selected_idea_choice" for item in at.radio)
-    if selection["status"] != "SELECTED":
-        assert selection["status"] == "NO_CANDIDATE_PASSED"
+    if selection["status"] == "NO_COHERENT_IDEA":
         assert selection["rejection_reasons"]
         assert not at.session_state["selected_idea_id"]
         assert at.session_state["automatic_recovery_attempted"]
-        assert any("No defensible primary idea" in item.value for item in at.error)
+        assert any("No coherent research hypothesis" in item.value for item in at.error)
         assert not at.exception
-        print("deployment smoke test: OK (honest no-defensible-idea state)")
+        print("deployment smoke test: OK (honest no-coherent-idea state)")
         return
     first_id = selection["selected_candidate_id"]
     context = at.session_state["selected_idea_context"]

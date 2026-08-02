@@ -1,4 +1,4 @@
-"""Deterministic hard-gated selection of the primary algorithm idea."""
+"""Calibrated maturity assessment and selection of research hypotheses."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ from primary_idea_contracts import (
     PRIMARY_IDEA_SELECTION_API_VERSION, PrimaryIdeaSelectionRequest,
 )
 from run_models import ResearchRun
-from scientific_validation import validate_candidate_for_promotion
+from scientific_validation import (
+    IdeaMaturityLevel, MaturityLimiter, validate_candidate_for_promotion,
+)
 from ux_models import DirectionSummary, IdeaDerivation, candidate_modification
 
 
@@ -23,6 +25,10 @@ class CandidateRankingRecord:
     weighted_score: float
     rank: int = 0
     non_selection_reason: str = ""
+    maturity_level: str = "REJECTED"
+    fatal_failures: tuple[str, ...] = ()
+    maturity_limiters: tuple[str, ...] = ()
+    pareto_front: int = 0
 
 
 @dataclass
@@ -39,6 +45,8 @@ class PrimaryIdeaSelectionResult:
     warnings: list[str] = field(default_factory=list)
     automatic_recovery_used: bool = False
     scientific_gate_results: dict[str, dict[str, object]] = field(default_factory=dict)
+    maturity_distribution: dict[str, int] = field(default_factory=dict)
+    exploratory_candidate_id: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -52,6 +60,8 @@ class PrimaryIdeaSelectionResult:
             "warnings": list(self.warnings),
             "automatic_recovery_used": self.automatic_recovery_used,
             "scientific_gate_results": dict(self.scientific_gate_results),
+            "maturity_distribution": dict(self.maturity_distribution),
+            "exploratory_candidate_id": self.exploratory_candidate_id,
         }
 
 
@@ -59,11 +69,12 @@ def _known(value: str) -> bool:
     return value.strip().casefold() not in {"", "unknown", "unspecified", "none"}
 
 
-def _gate_failures(
+def _contract_assessment(
     candidate: AlgorithmCandidate, derivation: IdeaDerivation,
     direction: DirectionSummary, gap: GapSignature, run: ResearchRun,
-) -> list[str]:
+) -> tuple[list[str], list[MaturityLimiter]]:
     failures: list[str] = []
+    limiters: list[MaturityLimiter] = []
     if not run.run_id or candidate.research_run_id != run.run_id:
         failures.append("invalid parent ResearchRun")
     if direction.parent_run_id != run.run_id or derivation.direction_id != direction.direction_id:
@@ -71,9 +82,13 @@ def _gate_failures(
     if gap.gap_id != candidate.gap_id or derivation.selected_gap_snapshot.get("gap_id") != gap.gap_id:
         failures.append("invalid selected gap")
     if run.evidence_bearing_paper_count < 1 or direction.evidence_bearing_paper_count < 1:
-        failures.append("no evidence-bearing ML papers")
+        limiters.append(MaturityLimiter(
+            "problem evidence: no evidence-bearing ML papers recorded",
+            "A research-worthy hypothesis needs direct problem evidence.",
+            "Retrieve and review a task-compatible problem paper.",
+        ))
     if not run.external_paper_ids:
-        failures.append("no external evidence")
+        failures.append("external evidence: no external mechanism evidence")
     if not all((derivation.mechanism_signal, derivation.mechanism_state,
                 derivation.mechanism_trigger, derivation.mechanism_response)):
         failures.append("external mechanism is not operational")
@@ -84,7 +99,7 @@ def _gate_failures(
     if not _known(candidate.base_algorithm_family) or not _known(direction.affected_algorithm_family):
         failures.append("algorithm family is unknown")
     if not candidate.affected_component or not _known(derivation.modification_slot):
-        failures.append("missing exact modification slot")
+        failures.append("algorithm action: no identifiable modification slot")
     modification = candidate_modification(candidate).strip()
     generic = {
         "improve aggregation", "add memory", "increase robustness",
@@ -94,7 +109,7 @@ def _gate_failures(
     if modification.casefold() in generic or len(modification.split()) < 3:
         failures.append("modification is generic or metaphor-only")
     if not candidate.new_state_variables and not candidate.selected_operators:
-        failures.append("no concrete new state, trigger, or rule")
+        failures.append("algorithm action: no concrete state, trigger, or rule")
     available = {
         str(item).casefold()
         for item in candidate.minimal_experiment.information_audit.get("inference", [])
@@ -110,16 +125,58 @@ def _gate_failures(
         failures.append("primary metric is unsupported")
     experiment = candidate.minimal_experiment
     if not all((experiment.hypothesis, experiment.success_rule, experiment.failure_rule)):
-        failures.append("minimal experiment is incomplete")
+        limiters.append(MaturityLimiter(
+            "experiment design: minimal experiment is incomplete",
+            "The causal uncertainty cannot yet be resolved efficiently.",
+            "Specify hypothesis, success threshold, failure threshold, and discriminating ablations.",
+        ))
     if not candidate.kill_criterion and not experiment.failure_rule:
-        failures.append("missing kill criterion")
+        limiters.append(MaturityLimiter(
+            "experiment design: missing kill criterion",
+            "An attractive result could otherwise evade falsification.",
+            "Define the result that abandons or redesigns the mechanism.",
+        ))
     if not candidate.novelty_status or not candidate.nearest_known_method_patterns:
-        failures.append("known-solution or prior-art status is absent")
+        limiters.append(MaturityLimiter(
+            "prior art: targeted known-solution status is absent",
+            "Duplicate risk remains unresolved.",
+            "Search problem, slot, mechanism-slot combination, and cross-task analogues.",
+        ))
     if not derivation.uncertainties and not candidate.scores.missing_evidence:
-        failures.append("explicit uncertainty is absent")
+        limiters.append(MaturityLimiter(
+            "uncertainty: explicit uncertainty record is absent",
+            "The research plan may overstate confidence.",
+            "Record the weakest evidence link and fastest invalidation test.", "MINOR_LIMITER",
+        ))
     if candidate.scores.rejection_flags:
         failures.extend(f"candidate rejection flag: {item}" for item in candidate.scores.rejection_flags)
-    return failures
+    return failures, limiters
+
+
+def _pareto_fronts(items: list[tuple[str, dict[str, float]]]) -> dict[str, int]:
+    """Deterministic non-dominated sorting; lower cost is already normalized upward."""
+    remaining = dict(items)
+    fronts: dict[str, int] = {}
+    front = 1
+    keys = ("user_problem_fit", "evidence_strength", "mechanism_quality",
+            "structural_alignment_quality", "implementation_feasibility",
+            "inference_information_availability", "falsifiability", "compute_memory_cost")
+    while remaining:
+        nondominated = []
+        for candidate_id, dimensions in remaining.items():
+            dominated = any(
+                other_id != candidate_id
+                and all(other.get(key, 0.0) >= dimensions.get(key, 0.0) for key in keys)
+                and any(other.get(key, 0.0) > dimensions.get(key, 0.0) for key in keys)
+                for other_id, other in remaining.items()
+            )
+            if not dominated:
+                nondominated.append(candidate_id)
+        for candidate_id in sorted(nondominated):
+            fronts[candidate_id] = front
+            remaining.pop(candidate_id)
+        front += 1
+    return fronts
 
 
 def _dimensions(candidate: AlgorithmCandidate, derivation: IdeaDerivation) -> dict[str, float]:
@@ -149,7 +206,7 @@ def _dimensions(candidate: AlgorithmCandidate, derivation: IdeaDerivation) -> di
 def select_primary_idea(
     request: PrimaryIdeaSelectionRequest,
 ) -> PrimaryIdeaSelectionResult:
-    """Apply non-overridable gates, then stable weighted ranking."""
+    """Reject only fatal incoherence, then select by maturity and Pareto quality."""
     request.validate()
     candidates = request.candidates
     derivations = request.derivations
@@ -177,23 +234,50 @@ def select_primary_idea(
         "expected_metric_relevance": .04, "compute_memory_cost": .02,
         "uncertainty": .02,
     }
-    valid: list[tuple[float, str, AlgorithmCandidate, IdeaDerivation, dict[str, float]]] = []
+    eligible: list[tuple[IdeaMaturityLevel, float, str, AlgorithmCandidate, IdeaDerivation, dict[str, float]]] = []
+    exploratory: list[tuple[float, str, AlgorithmCandidate, IdeaDerivation, dict[str, float]]] = []
+    maturity_by_id: dict[str, IdeaMaturityLevel] = {}
+    limiter_by_id: dict[str, list[str]] = {}
     for candidate in candidates:
         derivation = derivation_by_id.get(candidate.candidate_id)
-        failures = (["missing matching derivation"] if derivation is None else
-                    _gate_failures(candidate, derivation, direction, gap, parent_run))
+        failures: list[str] = ["provenance: missing matching derivation"] if derivation is None else []
+        contract_limiters: list[MaturityLimiter] = []
+        if derivation is not None:
+            contract_failures, contract_limiters = _contract_assessment(
+                candidate, derivation, direction, gap, parent_run,
+            )
+            failures.extend(contract_failures)
+        maturity = (IdeaMaturityLevel.REJECTED if failures else
+                    IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS if purpose is None else
+                    IdeaMaturityLevel.EXPLORATORY_HYPOTHESIS)
+        maturity_limiters = list(contract_limiters)
         if derivation is not None and purpose is not None:
             scientific = validate_candidate_for_promotion(
                 candidate=candidate, derivation=derivation, direction=direction,
                 gap=gap, purpose=purpose, papers=papers,
                 full_audit=(full_audits or {}).get(candidate.candidate_id),
             )
-            failures.extend(scientific.failures)
+            failures.extend(scientific.fatal_failures)
+            maturity_limiters.extend(scientific.maturity_limiters)
+            maturity = IdeaMaturityLevel.REJECTED if failures else scientific.maturity_level
             if full_audits is not None and candidate.candidate_id not in full_audits:
-                failures.append("full audit unavailable before promotion")
+                maturity_limiters.append(MaturityLimiter(
+                    "full audit: unavailable for this candidate",
+                    "Independent review dimensions have not been calibrated.",
+                    "Run the complete audit before claiming test-ready maturity.",
+                ))
+                maturity = min(maturity, IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS)
             scientific_results[candidate.candidate_id] = {
                 "passed": scientific.passed,
-                "failures": list(scientific.failures),
+                "fatal_failures": list(scientific.fatal_failures),
+                "maturity_limiters": [asdict(item) for item in scientific.maturity_limiters],
+                "strengths": list(scientific.strengths),
+                "maturity_level": scientific.maturity_level.name,
+                "maturity_reason": scientific.maturity_reason,
+                "repair_options": list(scientific.repair_options),
+                "confidence_by_dimension": scientific.confidence_by_dimension,
+                "open_design_choices": [asdict(item) for item in scientific.open_design_choices],
+                "repairs_applied": [asdict(item) for item in scientific.repairs_applied],
                 "paper_counts": scientific.paper_counts,
                 "paper_roles": [asdict(item) for item in scientific.paper_roles],
                 "modification_spec": asdict(scientific.modification_spec),
@@ -202,44 +286,70 @@ def select_primary_idea(
         dims = _dimensions(candidate, derivation) if derivation else {}
         score = round(sum(weights[key] * dims.get(key, 0.0) for key in weights), 6)
         if failures:
+            maturity = IdeaMaturityLevel.REJECTED
             rejected[candidate.candidate_id] = failures
+        elif maturity >= IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS:
+            eligible.append((maturity, score, candidate.candidate_id, candidate, derivation, dims))
         else:
-            valid.append((score, candidate.candidate_id, candidate, derivation, dims))
+            exploratory.append((score, candidate.candidate_id, candidate, derivation, dims))
+        maturity_by_id[candidate.candidate_id] = maturity
+        limiter_by_id[candidate.candidate_id] = list(dict.fromkeys(item.issue for item in maturity_limiters))
         records.append(CandidateRankingRecord(
             candidate.candidate_id, not failures, tuple(failures), dims, score,
+            maturity_level=maturity.name, fatal_failures=tuple(failures),
+            maturity_limiters=tuple(limiter_by_id[candidate.candidate_id]),
         ))
-    if not valid:
+    distribution = {level.name: sum(value == level for value in maturity_by_id.values())
+                    for level in IdeaMaturityLevel}
+    if not eligible:
+        if exploratory:
+            exploratory.sort(key=lambda item: (-item[0], item[1]))
+            best = exploratory[0]
+            return PrimaryIdeaSelectionResult(
+                "EXPLORATORY_AVAILABLE", best[2], best[3], best[1], records,
+                sorted(rejected), rejected,
+                "No research-worthy hypothesis passed yet; retained the strongest coherent exploratory hypothesis.",
+                "low", warnings=["Exploratory hypothesis — not promoted."],
+                automatic_recovery_used=automatic_recovery_used,
+                scientific_gate_results=scientific_results,
+                maturity_distribution=distribution, exploratory_candidate_id=best[1],
+            )
         return PrimaryIdeaSelectionResult(
-            "NO_CANDIDATE_PASSED", ranking_records=records,
+            "NO_COHERENT_IDEA", ranking_records=records,
             rejected_candidate_ids=sorted(rejected), rejection_reasons=rejected,
-            warnings=["No candidate satisfied every scientific hard gate."],
+            warnings=["Every candidate failed at least one fatal scientific gate."],
             automatic_recovery_used=automatic_recovery_used,
-            scientific_gate_results=scientific_results,
+            scientific_gate_results=scientific_results, maturity_distribution=distribution,
         )
-    valid.sort(key=lambda item: (-item[0], item[1]))
-    winner = valid[0]
-    ranks = {candidate_id: index + 1 for index, (_, candidate_id, *_rest) in enumerate(valid)}
+    highest = max(item[0] for item in eligible)
+    pool = [item for item in eligible if item[0] == highest]
+    fronts = _pareto_fronts([(item[2], item[5]) for item in pool])
+    pool.sort(key=lambda item: (fronts[item[2]], -item[1], item[2]))
+    winner = pool[0]
+    all_ranked = sorted(eligible, key=lambda item: (-int(item[0]), fronts.get(item[2], 99), -item[1], item[2]))
+    ranks = {item[2]: index + 1 for index, item in enumerate(all_ranked)}
     ranked_records = []
     for record in records:
         rank = ranks.get(record.candidate_id, 0)
         reason = ""
         if rank > 1:
-            reason = f"Lower hard-gated weighted score than {winner[2].candidate_name}."
+            reason = f"Lower maturity/Pareto rank than {winner[3].candidate_name}."
         elif not record.passed_hard_gates:
             reason = "; ".join(record.gate_failures)
         ranked_records.append(CandidateRankingRecord(
             record.candidate_id, record.passed_hard_gates, record.gate_failures,
             record.dimensions, record.weighted_score, rank, reason,
+            record.maturity_level, record.fatal_failures, record.maturity_limiters,
+            fronts.get(record.candidate_id, 0),
         ))
-    confidence = "high" if winner[0] >= .75 else "medium" if winner[0] >= .55 else "low"
+    confidence = "high" if winner[1] >= .75 else "medium" if winner[1] >= .55 else "low"
     return PrimaryIdeaSelectionResult(
-        "SELECTED", winner[2], winner[3], winner[1], ranked_records,
+        "SELECTED", winner[3], winner[4], winner[2], ranked_records,
         sorted(rejected), rejected,
-        "Selected after all scientific hard gates; it had the strongest "
-        "weighted evidence, structural alignment, algorithm specificity, "
-        "information availability, feasibility, and falsifiability profile.",
+        f"Selected from the highest maturity group ({highest.name}) using "
+        "non-dominated quality ranking and explicit minimum scientific floors.",
         confidence, automatic_recovery_used=automatic_recovery_used,
-        scientific_gate_results=scientific_results,
+        scientific_gate_results=scientific_results, maturity_distribution=distribution,
     )
 
 
@@ -277,7 +387,7 @@ def select_primary_idea_with_recovery(
         gap=gap, parent_run=parent_run, purpose=purpose, papers=papers,
         full_audits=full_audits,
     )
-    if initial.status == "SELECTED":
+    if initial.status in {"SELECTED", "EXPLORATORY_AVAILABLE"}:
         return initial
     recovered_candidates, recovered_derivations = recover()
     result = select_primary_idea_legacy(
@@ -286,6 +396,6 @@ def select_primary_idea_with_recovery(
         automatic_recovery_used=True, purpose=purpose, papers=papers,
         full_audits=full_audits,
     )
-    if result.status != "SELECTED":
+    if result.status not in {"SELECTED", "EXPLORATORY_AVAILABLE"}:
         result.warnings.append("One bounded automatic recovery cycle was exhausted.")
     return result
