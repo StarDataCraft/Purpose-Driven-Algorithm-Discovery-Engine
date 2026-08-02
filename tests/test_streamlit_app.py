@@ -334,11 +334,14 @@ def test_same_direction_reuses_and_different_direction_rebuilds_external_state()
     app.button(key="_select_direction_0").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     first = app.session_state["current_external_result"]
-    first_identity = first.identity()
+    first_identity = (
+        first["parent_run_id"], first["selected_direction_id"], first["selected_gap_id"]
+    )
 
     app.radio(key="_primary_step").set_value(PART_1).run()
     app.button(key="_select_direction_0").click().run(timeout=30)
-    assert app.session_state["current_external_result"].identity() == first_identity
+    current = app.session_state["current_external_result"]
+    assert (current["parent_run_id"], current["selected_direction_id"], current["selected_gap_id"]) == first_identity
     assert app.session_state["current_idea_portfolio"]
 
     app.radio(key="_primary_step").set_value(PART_1).run()
@@ -346,14 +349,48 @@ def test_same_direction_reuses_and_different_direction_rebuilds_external_state()
     assert app.session_state["current_external_result"] is None
     app.button(key="_derive_ideas").click().run(timeout=30)
     second = app.session_state["current_external_result"]
-    assert second.identity() != first_identity
-    assert second.papers
+    assert (second["parent_run_id"], second["selected_direction_id"], second["selected_gap_id"]) != first_identity
+    assert second["papers"]
     visible = " ".join(
         str(item.value) for kind in (app.error, app.warning, app.info)
         for item in kind
     )
     assert "Complete Step 4" not in visible
     assert "('Novelty remains unverified.',)" not in visible
+
+
+def test_part_2_hot_reload_migrates_exact_legacy_domain_shape():
+    app = run_offline_part_1(app_start())
+    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key="_derive_ideas").click().run(timeout=30)
+    external = dict(app.session_state["current_external_result"])
+    legacy = dict(external["ranked_domain_selections"][0])
+    for key in (
+        "unmatched_required_roles", "problem_topology_compatibility",
+        "likely_mechanism_value", "query_specificity", "analogy_risk",
+        "rejection_reason", "schema_version", "migration_provenance",
+        "migration_warnings",
+    ):
+        legacy.pop(key, None)
+    external.pop("schema_version", None)
+    original_count = len(external["ranked_domain_selections"])
+    external["ranked_domain_selections"] = [
+        type("LegacyDomainSelection", (), legacy)(),
+        {"selected": True},
+        *external["ranked_domain_selections"][1:],
+    ]
+    app.session_state["current_external_result"] = type(
+        "LegacyExternalDiscoveryResult", (), external
+    )()
+    app.run(timeout=30)
+    assert not app.exception
+    migrated = app.session_state["current_external_result"]
+    assert migrated["schema_version"] == "external-discovery-v2"
+    assert migrated["ranked_domain_selections"][0]["unmatched_required_roles"] == []
+    assert migrated["ranked_domain_selections"][0]["analogy_risk"] is None
+    assert len(migrated["ranked_domain_selections"]) == original_count
+    assert "Skipped malformed domain selection" in app.session_state["external_result_migration_message"]
+    assert app.session_state["external_result_resolution"] == "PARTIALLY_MIGRATED"
 
 
 def test_two_distinct_directions_complete_all_three_parts():

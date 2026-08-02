@@ -119,6 +119,12 @@ def main() -> None:
     at.button(key="_select_direction_0").click().run(timeout=30)
     assert at.session_state["selected_direction_id"]
     at.button(key="_derive_ideas").click().run(timeout=30)
+    assert at.session_state["session_state_schema_version"] == "session-state-v2"
+    assert at.session_state["current_external_result"]["schema_version"] == "external-discovery-v2"
+    assert all(
+        item["schema_version"] == "domain-selection-v2"
+        for item in at.session_state["current_external_result"]["ranked_domain_selections"]
+    )
     assert len(at.session_state["current_idea_portfolio"]) >= 2
     first_id = at.session_state["primary_idea_selection_record"]["selected_candidate_id"]
     assert at.session_state["primary_idea_selection_record"]["status"] == "SELECTED"

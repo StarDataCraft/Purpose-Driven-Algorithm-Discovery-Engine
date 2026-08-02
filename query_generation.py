@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from typing import Any, Mapping
 
 from algorithm_library import load_algorithm_library
 from app_settings import SETTINGS
 from models import GapSignature, Paper, PurposeContract
 
 MAX_QUERY_LENGTH = SETTINGS.maximum_query_length
+DOMAIN_SELECTION_SCHEMA_VERSION = "domain-selection-v2"
 
 
 @dataclass
@@ -68,11 +70,76 @@ class DomainSelection:
     missing_correspondence: list[str]
     selected: bool
     unmatched_required_roles: list[str] = field(default_factory=list)
-    problem_topology_compatibility: float = 0.0
-    likely_mechanism_value: float = 0.0
-    query_specificity: float = 0.0
-    analogy_risk: float = 1.0
+    problem_topology_compatibility: float | None = None
+    likely_mechanism_value: float | None = None
+    query_specificity: float | None = None
+    analogy_risk: float | None = None
     rejection_reason: str = ""
+    schema_version: str = DOMAIN_SELECTION_SCHEMA_VERSION
+    migration_provenance: str = "current"
+    migration_warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DomainSelection":
+        return normalize_domain_selection(value)
+
+
+def normalize_domain_selection(value: object) -> DomainSelection:
+    """Convert current, legacy mapping, or legacy object records to v2."""
+    if isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {
+            name: getattr(value, name) for name in (
+                "domain", "matched_problem_roles", "relevance_score", "reasons",
+                "missing_correspondence", "selected", "unmatched_required_roles",
+                "problem_topology_compatibility", "likely_mechanism_value",
+                "query_specificity", "analogy_risk", "rejection_reason",
+                "schema_version", "migration_provenance", "migration_warnings",
+            ) if hasattr(value, name)
+        }
+    if not str(payload.get("domain", "")).strip():
+        raise ValueError("DomainSelection has no domain")
+    required = ("matched_problem_roles", "reasons", "missing_correspondence")
+    warnings = list(payload.get("migration_warnings", []))
+    new_fields = (
+        "unmatched_required_roles", "problem_topology_compatibility",
+        "likely_mechanism_value", "query_specificity", "analogy_risk",
+    )
+    missing = [name for name in new_fields if name not in payload]
+    if missing:
+        warnings.append("Legacy domain selection lacked: " + ", ".join(missing))
+    return DomainSelection(
+        domain=str(payload["domain"]),
+        matched_problem_roles=list(payload.get(required[0], [])),
+        relevance_score=float(payload.get("relevance_score", 0.0)),
+        reasons=list(payload.get(required[1], [])),
+        missing_correspondence=list(payload.get(required[2], [])),
+        selected=bool(payload.get("selected", False)),
+        unmatched_required_roles=list(payload.get("unmatched_required_roles", [])),
+        problem_topology_compatibility=_optional_float(payload.get("problem_topology_compatibility")),
+        likely_mechanism_value=_optional_float(payload.get("likely_mechanism_value")),
+        query_specificity=_optional_float(payload.get("query_specificity")),
+        analogy_risk=_optional_float(payload.get("analogy_risk")),
+        rejection_reason=str(payload.get("rejection_reason", "")),
+        migration_provenance=(
+            str(payload.get("migration_provenance", "current"))
+            if not missing else "legacy-domain-selection"
+        ),
+        migration_warnings=warnings,
+    )
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 RECURRENCE_SYNONYMS = [

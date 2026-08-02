@@ -66,6 +66,7 @@ from diagram_builders import (
     mechanism_transfer_spec,
 )
 from external_discovery_pipeline import SearchPolicy
+from session_schema import SESSION_STATE_SCHEMA_VERSION, resolve_external_result
 from idea_pipeline import derive_ideas_for_direction
 from primary_idea_selection import select_primary_idea
 
@@ -254,12 +255,71 @@ def initialize_state() -> None:
         "audit_unavailable_notice_shown": False,
         "current_diagram_specs": [],
         "current_external_result": None,
+        "session_state_schema_version": SESSION_STATE_SCHEMA_VERSION,
+        "external_result_resolution": "ABSENT",
+        "external_result_migration_message": "",
+        "external_result_rebuild_required": False,
         "active_primary_step": PRIMARY_STEPS[0],
         "ux_performance": {},
         "engine_diagnostics": engine_state_defaults(SETTINGS),
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+    migrate_external_session_state()
+
+
+def _external_identity() -> tuple[str, str, str] | None:
+    run = st.session_state.current_research_run
+    direction = st.session_state.selected_direction_snapshot
+    gap = st.session_state.selected_gap
+    if not (run and direction and gap):
+        return None
+    return run.run_id, direction.direction_id, gap.gap_id
+
+
+def resolve_current_external_result():
+    """Return a normalized typed view while persisting only versioned data."""
+    resolution = resolve_external_result(
+        st.session_state.current_external_result, _external_identity()
+    )
+    st.session_state.external_result_resolution = resolution.status
+    st.session_state.external_result_migration_message = resolution.message
+    if resolution.status in {"CURRENT", "MIGRATED", "PARTIALLY_MIGRATED"} and resolution.result:
+        st.session_state.current_external_result = resolution.result.to_dict()
+        return resolution.result
+    return None
+
+
+def _clear_external_downstream_state() -> None:
+    """Invalidate only state derived from external discovery."""
+    replacements = {
+        "current_external_result": None, "current_external_run": None,
+        "external_papers": [], "mechanisms": [], "rejected_mechanisms": [],
+        "alignments": [], "candidate_portfolio": [], "direction_families": [],
+        "current_idea_portfolio": [], "selected_idea_id": "",
+        "selected_candidate_snapshot": None, "selected_derivation_snapshot": None,
+        "selected_idea_context": None, "primary_idea_selection_record": None,
+        "current_result_explanation": None, "current_result_audit": None,
+    }
+    for key, value in replacements.items():
+        st.session_state[key] = value
+
+
+def migrate_external_session_state() -> None:
+    """Hot-reload migration entry point, executed once on every app run."""
+    value = st.session_state.current_external_result
+    if value is None:
+        st.session_state.session_state_schema_version = SESSION_STATE_SCHEMA_VERSION
+        return
+    resolution = resolve_external_result(value, _external_identity())
+    st.session_state.external_result_resolution = resolution.status
+    st.session_state.external_result_migration_message = resolution.message
+    if resolution.status in {"CURRENT", "MIGRATED", "PARTIALLY_MIGRATED"} and resolution.result:
+        st.session_state.current_external_result = resolution.result.to_dict()
+    elif resolution.status in {"IDENTITY_MISMATCH", "INVALID_SCHEMA", "UNRECOVERABLE"}:
+        _clear_external_downstream_state()
+        st.session_state.external_result_rebuild_required = True
+    st.session_state.session_state_schema_version = SESSION_STATE_SCHEMA_VERSION
 
 
 def apply_discovery_result(result: StructuralDiscoveryResult) -> None:
@@ -1356,7 +1416,7 @@ def mechanism_page() -> None:
         return
     if st.button("Run direction-scoped external pipeline", key="_mechanism_fetch"):
         build_current_idea_portfolio()
-    result = st.session_state.current_external_result
+    result = resolve_current_external_result()
     if not result:
         st.info("Search external evidence from Analyze the gap or run it here.")
         return
@@ -2648,7 +2708,7 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
     direction = st.session_state.selected_direction_snapshot
     gap = st.session_state.selected_gap
     run = st.session_state.current_research_run
-    existing = st.session_state.current_external_result
+    existing = resolve_current_external_result()
     identity = (run.run_id, direction.direction_id, gap.gap_id)
     if (
         existing and existing.identity() == identity
@@ -2689,7 +2749,8 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
             fixture_loader=lambda: load_fixture("external_papers.json"),
             progress_callback=progress_callback if callable(progress_callback) else None,
         )
-    st.session_state.current_external_result = result.external_result
+    st.session_state.current_external_result = result.external_result.to_dict()
+    st.session_state.external_result_rebuild_required = False
     st.session_state.external_papers = result.external_result.papers
     st.session_state.current_external_run = result.external_result.retrieval_run
     st.session_state.mechanisms = result.external_result.mechanisms
@@ -2747,6 +2808,10 @@ def render_fields(values: dict[str, object]) -> None:
         st.markdown(f"**{label}:** {readable_items(value)}")
 
 
+def format_legacy_score(value: float | None) -> float | str:
+    return round(value, 3) if value is not None else "Not recorded in this legacy result"
+
+
 def analyze_gap_page() -> None:
     st.title("Analyze the gap / 分析 Gap")
     render_workflow_status()
@@ -2762,6 +2827,13 @@ def analyze_gap_page() -> None:
         "Back to directions / 返回研究方向",
         on_click=navigate_to, args=(PRIMARY_STEPS[0],),
     )
+    if (
+        st.session_state.external_result_rebuild_required
+        and st.session_state.current_research_run
+        and st.session_state.selected_gap
+    ):
+        st.warning("Stored external evidence was incompatible and is being rebuilt safely.")
+        build_current_idea_portfolio()
     st.header("Selected direction / 已选方向")
     render_fields({
         "Direction": direction.title,
@@ -2830,7 +2902,7 @@ def analyze_gap_page() -> None:
             st.session_state.ux_performance[
                 "part_2_analysis_seconds"
             ] = round(time.perf_counter() - part_started, 4)
-    external = st.session_state.current_external_result
+    external = resolve_current_external_result()
     if external:
         st.header("Normalized problem / 规范化问题")
         signature = external.cross_domain_problem_signature
@@ -2850,10 +2922,10 @@ def analyze_gap_page() -> None:
                     "Why selected": readable_items(selection.reasons),
                     "Matched roles": readable_items(selection.matched_problem_roles),
                     "Unmatched required roles": readable_items(selection.unmatched_required_roles),
-                    "Problem-topology compatibility": selection.problem_topology_compatibility,
-                    "Likely mechanism value": selection.likely_mechanism_value,
-                    "Query specificity": selection.query_specificity,
-                    "Analogy risk": selection.analogy_risk,
+                    "Problem-topology compatibility": format_legacy_score(selection.problem_topology_compatibility),
+                    "Likely mechanism value": format_legacy_score(selection.likely_mechanism_value),
+                    "Query specificity": format_legacy_score(selection.query_specificity),
+                    "Analogy risk": format_legacy_score(selection.analogy_risk),
                     "Selection score": round(selection.relevance_score, 3),
                     "Analogy limitations": readable_items(selection.missing_correspondence),
                 })
@@ -2883,6 +2955,10 @@ def analyze_gap_page() -> None:
             render_fields({
                 "Source failures": retrieval.source_failures or "None",
                 "Warnings": readable_items(external.warnings),
+                "Build schema": "external-discovery-v2",
+                "Session schema": st.session_state.session_state_schema_version,
+                "Resolution": st.session_state.external_result_resolution,
+                "Migration": st.session_state.external_result_migration_message or "None",
             })
     ideas = st.session_state.current_idea_portfolio
     if not ideas:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 from alignment import align
 from app_settings import SETTINGS
@@ -14,12 +14,14 @@ from openalex_client import default_query_budget, get_openalex_client
 from paper_fetchers import deduplicate_papers
 from query_generation import (
     CrossDomainProblemSignature, DomainSelection, generate_external_queries,
-    normalize_cross_domain_problem, select_external_domains,
+    normalize_cross_domain_problem, normalize_domain_selection, select_external_domains,
 )
 from retrieval_service import retrieve_corpus
 from run_models import ResearchRun, StageRun, utc_now
 from signatures import load_mechanism_seeds
 from ux_models import DirectionSummary
+
+EXTERNAL_DISCOVERY_SCHEMA_VERSION = "external-discovery-v2"
 
 
 @dataclass(frozen=True)
@@ -75,9 +77,62 @@ class ExternalDiscoveryResult:
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     reused_from_session: bool = False
+    schema_version: str = EXTERNAL_DISCOVERY_SCHEMA_VERSION
+    migration_provenance: str = "current"
+    migration_warnings: list[str] = field(default_factory=list)
 
     def identity(self) -> tuple[str, str, str]:
         return self.parent_run_id, self.selected_direction_id, self.selected_gap_id
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["schema_version"] = EXTERNAL_DISCOVERY_SCHEMA_VERSION
+        return payload
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any] | object) -> "ExternalDiscoveryResult":
+        return normalize_external_discovery_result(value)
+
+
+def normalize_external_discovery_result(value: Mapping[str, Any] | object) -> ExternalDiscoveryResult:
+    """Rebuild a stable v2 result from JSON, current objects, or legacy objects."""
+    if isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {name: getattr(value, name) for name in ExternalDiscoveryResult.__dataclass_fields__ if hasattr(value, name)}
+    warnings = list(payload.get("migration_warnings", []))
+    selections = []
+    for index, item in enumerate(payload.get("ranked_domain_selections", [])):
+        try:
+            selection = normalize_domain_selection(item)
+            selections.append(selection)
+            warnings.extend(selection.migration_warnings)
+        except (TypeError, ValueError, AttributeError) as exc:
+            warnings.append(f"Skipped malformed domain selection {index}: {exc}")
+    if not selections and payload.get("ranked_domain_selections"):
+        raise ValueError("No recoverable domain selections")
+    def records(name: str, cls: type) -> list[Any]:
+        return [item if isinstance(item, cls) else cls(**dict(item)) for item in payload.get(name, [])]
+    signature_value = payload.get("cross_domain_problem_signature")
+    signature = signature_value if isinstance(signature_value, CrossDomainProblemSignature) else CrossDomainProblemSignature(**dict(signature_value or {}))
+    run_value = payload.get("retrieval_run")
+    run = run_value if isinstance(run_value, ResearchRun) else ResearchRun.from_dict(dict(run_value or {}))
+    legacy = payload.get("schema_version") != EXTERNAL_DISCOVERY_SCHEMA_VERSION
+    warnings = list(dict.fromkeys(warnings))
+    return ExternalDiscoveryResult(
+        parent_run_id=str(payload.get("parent_run_id", "")), selected_direction_id=str(payload.get("selected_direction_id", "")),
+        selected_gap_id=str(payload.get("selected_gap_id", "")), cross_domain_problem_signature=signature,
+        ranked_domain_selections=selections,
+        accepted_queries_by_domain={str(k): list(v) for k, v in dict(payload.get("accepted_queries_by_domain", {})).items()},
+        rejected_queries=[dict(item) for item in payload.get("rejected_queries", [])], papers=records("papers", Paper),
+        retrieval_run=run, mechanisms=records("mechanisms", MechanismSignature),
+        rejected_mechanisms=[dict(item) for item in payload.get("rejected_mechanisms", [])],
+        alignments=records("alignments", AlignmentResult), accepted_alignments=records("accepted_alignments", AlignmentResult),
+        stage_diagnostics=dict(payload.get("stage_diagnostics", {})), warnings=list(payload.get("warnings", [])),
+        errors=list(payload.get("errors", [])), reused_from_session=bool(payload.get("reused_from_session", False)),
+        migration_provenance="legacy-external-result" if legacy else str(payload.get("migration_provenance", "current")),
+        migration_warnings=warnings,
+    )
 
 
 def _stage(
