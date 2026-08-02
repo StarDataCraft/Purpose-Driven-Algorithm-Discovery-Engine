@@ -1,0 +1,11 @@
+[
+  {"id":"promoted","promotion_status":"PROMOTED","title":"Online ensemble recovery under recurring drift","algorithm":"Random Forest","family":"ensemble","component":"aggregation","origin":"assumption_mismatch","paper":"ml:rf-drift-1"},
+  {"id":"unbound-bindable","promotion_status":"MALFORMED_OR_UNBOUND","title":"Unspecified: recurring concept drift","algorithm":"Unspecified","family":"unspecified","component":"update_rule","origin":"explicit","paper":"ml:rf-drift-2"},
+  {"id":"incomplete-bindable","promotion_status":"MALFORMED_OR_UNBOUND","title":"Conflicting evidence under","algorithm":"Unspecified","family":"unspecified","component":"aggregation","origin":"contradictory_evidence","paper":"ml:rf-drift-1"},
+  {"id":"coverage-unbound","promotion_status":"MALFORMED_OR_UNBOUND","title":"Missing recovery coverage for online learning","algorithm":"Unspecified","family":"unspecified","component":"model_selection","origin":"coverage","paper":"ml:rf-drift-2"},
+  {"id":"purpose-only","promotion_status":"MALFORMED_OR_UNBOUND","title":"Purpose hypothesis only","algorithm":"Unspecified","family":"unspecified","component":"memory","origin":"purpose_contract","paper":"purpose"},
+  {"id":"unknown-unrelated","promotion_status":"MALFORMED_OR_UNBOUND","title":"Unknown algorithm issue","algorithm":"Unspecified","family":"unspecified","component":"routing","origin":"explicit","paper":"ml:kmeans-3"},
+  {"id":"incomplete-structure","promotion_status":"MALFORMED_OR_UNBOUND","title":"Gap in","algorithm":"Unspecified","family":"unspecified","component":"","origin":"coverage","paper":"ml:rf-drift-1"},
+  {"id":"duplicate-wording","promotion_status":"SINGLE_PAPER","title":"Slow recovery for returning concepts","algorithm":"Random Forest","family":"ensemble","component":"aggregation","origin":"explicit","paper":"ml:rf-drift-1"},
+  {"id":"wrong-task","promotion_status":"MALFORMED_OR_UNBOUND","title":"Gaussian process regime adaptation","algorithm":"Gaussian Process","family":"probabilistic_kernel","component":"state_estimation","origin":"explicit","paper":"ml:gp-regime-1"}
+]

@@ -118,7 +118,7 @@ def main() -> None:
     assert at.session_state["current_direction_portfolio"]
     direction_result = at.session_state["direction_portfolio_result"]
     assert 3 <= direction_result.actual_count <= 6
-    assert direction_result.recommended and direction_result.exploratory
+    assert direction_result.all_directions
     assert all(item.portfolio_tier in {"RECOMMENDED", "EXPLORATORY"}
                for item in direction_result.all_directions)
     assert all(

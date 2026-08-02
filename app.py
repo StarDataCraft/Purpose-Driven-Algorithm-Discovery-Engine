@@ -25,6 +25,9 @@ from alignment import align
 from config import DEFAULT_DB, FIXTURE_DIR
 from coverage_analysis import coverage_matrix
 from discovery_pipeline import StructuralDiscoveryResult, discover_structural_gaps
+from direction_generation import (
+    axis_queries, generate_direction_candidates,
+)
 from direction_families import create_direction_families
 from gap_mining import corpus_summary
 from io_utils import experiment_to_markdown, records_to_csv, to_json
@@ -240,6 +243,8 @@ def initialize_state() -> None:
         "current_purpose_contract": None,
         "current_direction_portfolio": [],
         "direction_portfolio_result": None,
+        "direction_generation_result": None,
+        "direction_expansion_diagnostics": {},
         "selected_direction_id": "",
         "selected_direction_snapshot": None,
         "selected_gap_family_id": "",
@@ -428,6 +433,7 @@ def invalidate_downstream_for_purpose() -> None:
         "direction_families": [], "candidate_portfolio": [],
         "external_search_diagnostics": None, "current_external_run": None,
         "current_direction_portfolio": [], "direction_portfolio_result": None,
+        "direction_generation_result": None, "direction_expansion_diagnostics": {},
         "selected_direction_id": "",
         "selected_direction_snapshot": None, "selected_gap_family_id": "",
         "current_idea_portfolio": [], "selected_idea_id": "",
@@ -2094,21 +2100,111 @@ def execute_direction_search(
         binding.algorithm if binding and binding.binding_granularity ==
         "exact algorithm" else "Unspecified",
     )
+    direction_generation = generate_direction_candidates(
+        purpose, discovery.consolidation.families,
+        discovery.gaps, discovery.papers,
+    )
+    eligible_count = len(direction_generation.recommended_families) + len(
+        direction_generation.exploratory_families
+    )
+    represented_axis_count = len({
+        item.purpose_axis_id for item in direction_generation.candidates
+        if item.eligibility_status in {"RECOMMENDED_ELIGIBLE", "EXPLORATORY_ELIGIBLE"}
+    })
+    expansion_needed = eligible_count < 3 or represented_axis_count < 3
+    expansion_diagnostics = {
+        "attempted": expansion_needed,
+        "shortage_counts": direction_generation.grouped_rejections,
+        "axis_queries": {}, "new_papers": 0, "new_evidence_events": 0,
+        "repaired_titles": direction_generation.diagnostics["repaired_titles"],
+        "repaired_family_bindings": direction_generation.diagnostics["repaired_family_bindings"],
+        "newly_eligible_directions": 0,
+    }
+    missing_axes = []
+    if expansion_needed:
+        represented_axes = {
+            item.purpose_axis_id for item in direction_generation.candidates
+            if item.eligibility_status in {"RECOMMENDED_ELIGIBLE", "EXPLORATORY_ELIGIBLE"}
+        }
+        missing_axes = [
+            axis for axis in direction_generation.axes
+            if axis.axis_id not in represented_axes
+        ][:2]
+        expansion_diagnostics["axis_queries"] = {
+            axis.axis_id: axis_queries(axis)[:1] for axis in missing_axes
+        }
+        expansion_diagnostics["papers_per_axis"] = {
+            axis.axis_id: sum(
+                any(term.casefold() in f"{paper.title} {paper.abstract}".casefold()
+                    for term in axis.search_vocabulary)
+                for paper in papers
+            ) for axis in missing_axes
+        }
+    if missing_axes and requested_mode != "OFFLINE_FIXTURE" and sources:
+        expansion_papers = []
+        for index, axis in enumerate(missing_axes):
+            queries = axis_queries(axis)[:1]
+            axis_papers, axis_run = retrieve_corpus(
+                purpose, queries, requested_mode=requested_mode,
+                sources=[sources[index % len(sources)]],
+                maximum_per_query=min(4, maximum_per_query), maximum_total=8,
+                allow_cache=True, force_fresh=False,
+                allow_offline_fallback=False,
+                stage_name=f"direction_axis_expansion_{index + 1}",
+            )
+            expansion_papers.extend(axis_papers)
+            run.source_results.extend(axis_run.source_results)
+            run.stages.extend(axis_run.stages)
+            run.source_failures.update(axis_run.source_failures)
+            run.raw_paper_count += axis_run.raw_paper_count
+        new_ids = {
+            paper.paper_id for paper in expansion_papers
+        } - {paper.paper_id for paper in papers}
+        if new_ids:
+            papers = deduplicate_papers([*papers, *expansion_papers])[:maximum_total]
+            run.finalize_from_papers(papers)
+            expanded_discovery = discover_structural_gaps(
+                papers, purpose,
+                binding.algorithm if binding and binding.binding_granularity ==
+                "exact algorithm" else "Unspecified",
+            )
+            expanded_generation = generate_direction_candidates(
+                purpose, expanded_discovery.consolidation.families,
+                expanded_discovery.gaps, expanded_discovery.papers,
+            )
+            expanded_eligible = len(expanded_generation.recommended_families) + len(
+                expanded_generation.exploratory_families
+            )
+            expansion_diagnostics.update({
+                "new_papers": len(new_ids),
+                "new_evidence_events": max(
+                    0, len(expanded_discovery.consolidation.evidence_events)
+                    - len(discovery.consolidation.evidence_events),
+                ),
+                "newly_eligible_directions": max(0, expanded_eligible - eligible_count),
+                "repaired_titles": expanded_generation.diagnostics["repaired_titles"],
+                "repaired_family_bindings": expanded_generation.diagnostics["repaired_family_bindings"],
+            })
+            discovery, direction_generation = expanded_discovery, expanded_generation
     for gap in discovery.gaps:
         gap.research_run_id = run.run_id
+    repaired_by_id = {gap.gap_id: gap for gap in direction_generation.repaired_gaps}
+    discovery.gaps = [repaired_by_id.get(gap.gap_id, gap) for gap in discovery.gaps]
     apply_discovery_result(discovery)
     record_discovery_stages(run, discovery)
     run.structural_gap_count = len(discovery.gaps)
     generate_quality_warnings(run)
     portfolio_result = ux_models_module.build_tiered_direction_portfolio(
         run_id=run.run_id, purpose=purpose,
-        promoted_families=discovery.consolidation.promoted,
-        exploratory_families=discovery.consolidation.exploratory,
+        promoted_families=direction_generation.recommended_families,
+        exploratory_families=direction_generation.exploratory_families,
         gaps=discovery.gaps, papers=discovery.papers,
     )
     st.session_state.current_research_run = run
     st.session_state.current_direction_portfolio = portfolio_result.all_directions
     st.session_state.direction_portfolio_result = portfolio_result
+    st.session_state.direction_generation_result = direction_generation
+    st.session_state.direction_expansion_diagnostics = expansion_diagnostics
     st.session_state.algorithm_bindings = bindings
     st.session_state.problem_query_audit = broad_audit
     st.session_state.focused_query_audit = focused_audit
@@ -2705,14 +2801,32 @@ def discover_directions_page() -> None:
                 if portfolio.actual_count == 1 else portfolio.insufficient_choice_reason
             )
             with st.expander("Why the choice set is limited"):
+                expansion = st.session_state.direction_expansion_diagnostics
                 render_fields({
                     "Promoted families considered": len(st.session_state.promoted_gap_families),
                     "Exploratory families considered": len(st.session_state.exploratory_gap_families),
-                    "Expansion attempted": "Yes" if portfolio.expansion_attempted else "No",
-                    "Expansion actions": portfolio.expansion_actions,
-                    "Rejection reasons": [reason for item in portfolio.rejected for reason in item["reasons"]],
+                    "Expansion attempted": "Yes" if expansion.get("attempted") else "No",
+                    "Rejection summary": [
+                        f"{count} candidate(s): {reason.replace('_', ' ').lower()}"
+                        for reason, count in sorted(expansion.get("shortage_counts", {}).items())
+                    ] or "No additional eligible evidence path was found.",
+                    "Bindings repaired": expansion.get("repaired_family_bindings", 0),
+                    "Titles repaired": expansion.get("repaired_titles", 0),
+                    "Axis-specific queries": sum(len(items) for items in expansion.get("axis_queries", {}).values()),
+                    "New papers": expansion.get("new_papers", 0),
+                    "Newly eligible directions": expansion.get("newly_eligible_directions", 0),
                     "How to obtain more alternatives": "Broaden the publication range or task wording; include another source; reduce an overly narrow algorithm restriction.",
                 })
+                st.markdown("**Technical record-level diagnostics**")
+                generation = st.session_state.direction_generation_result
+                st.dataframe([{
+                    "title": item.original_title,
+                    "origin": item.extraction_origin,
+                    "status": item.eligibility_status,
+                    "family": item.affected_algorithm_family,
+                    "papers": ", ".join(item.evidence_paper_ids),
+                    "reasons": "; ".join(item.rejection_reasons),
+                } for item in generation.candidates])
 
     def render_direction_card(direction: object) -> None:
         with st.container(border=True):
