@@ -12,6 +12,9 @@ from evaluation.audits import audit_alignment, audit_gap, audit_mechanism, candi
 from evaluation.audit_models import AuditDimension, ResultAudit
 from models import AlgorithmCandidate, AlignmentResult, GapSignature, MechanismSignature, Paper, PurposeContract
 from run_models import ResearchRun
+from scientific_validation import (
+    DIRECT_FAILURE_EVIDENCE, classify_paper_roles, evidence_count_invariants,
+)
 
 
 DIMENSION_NAMES = (
@@ -58,8 +61,13 @@ def audit_complete_result(
         if paper.reviewed_relevance_label in {"RELEVANT", "HIGHLY_RELEVANT"}
     }
     automatically_retained = sum(bool(paper.estimated_relevance_label) for paper in papers)
-    direct = len(set(gap.evidence_paper_ids) & {paper.paper_id for paper in papers})
-    reviewed_direct = len(set(gap.evidence_paper_ids) & relevant_ids)
+    roles = classify_paper_roles(papers, purpose, gap, candidate)
+    paper_counts = evidence_count_invariants(roles)
+    direct_ids = {
+        item.paper_id for item in roles if item.role == DIRECT_FAILURE_EVIDENCE
+    }
+    direct = paper_counts["direct_support_count"]
+    reviewed_direct = len(direct_ids & relevant_ids)
     gap_check = audit_gap(gap, relevant_ids or set(gap.evidence_paper_ids))
     mechanism_check = audit_mechanism(mechanism)
     alignment_check = audit_alignment(alignment)
@@ -101,14 +109,17 @@ def audit_complete_result(
         "Review top 5/10/20 and known-solution recall on live, human-labeled evidence.", True,
     ))
     evidence_score = 4 if direct >= 2 and gap_check.label not in {"UNSUPPORTED"} else 3 if direct else 1
-    if reviewed_direct == 0:
-        evidence_score = min(evidence_score, 3)
+    review_warning = (["Direct evidence has not received human review; confidence remains provisional."]
+                      if reviewed_direct == 0 and direct else [])
     dimensions.append(_dimension(
         "evidence_gap_validity", evidence_score,
         [f"direct_evidence_papers={direct}", f"human_reviewed_direct={reviewed_direct}",
+         f"candidate_papers={paper_counts['candidate_paper_count']}",
+         f"automatically_relevant={paper_counts['automatically_relevant_paper_count']}",
          f"gap_audit={gap_check.label}",
          f"scope={gap.field_provenance.get('scope', gap.gap_type)}"],
-        [] if evidence_score >= 4 else ["The promoted gap lacks independent human-reviewed direct support."],
+        ([] if evidence_score >= 4 else ["The promoted gap lacks sufficient direct support."])
+        + review_warning,
         "Human-review the evidence sentences and rerun known-solution search before promotion.", True,
     ))
     novelty = candidate.novelty_status.upper().replace(" ", "_")

@@ -242,6 +242,41 @@ class ExperimentPlan:
 
 
 @dataclass
+class AlgorithmModificationSpec:
+    """Executable operator-to-algorithm translation used by promotion gates."""
+
+    base_algorithm_family: str
+    base_algorithm_variant: str
+    modification_slot: str
+    original_state: list[str]
+    new_state_variables: list[str]
+    variable_definitions: dict[str, str]
+    trigger_condition: str
+    update_rule: str
+    action_rule: str
+    initialization: str
+    fallback_rule: str
+    training_information: list[str]
+    inference_information: list[str]
+    delayed_information: list[str]
+    compute_complexity: str
+    memory_complexity: str
+    protected_invariants: list[str]
+    unresolved_implementation_choices: list[str]
+
+
+@dataclass(frozen=True)
+class PaperEvidenceRole:
+    paper_id: str
+    role: str
+    automatic_relevance: str
+    human_review_status: str
+    supported_claim: str
+    evidence_excerpt: str
+    inclusion_reason: str
+
+
+@dataclass
 class AlgorithmCandidate:
     candidate_id: str
     candidate_name: str

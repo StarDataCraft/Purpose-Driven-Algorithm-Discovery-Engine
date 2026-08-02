@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Sequence
 
-from models import AlgorithmCandidate, GapSignature
+from models import AlgorithmCandidate, GapSignature, Paper, PurposeContract
 from run_models import ResearchRun
+from scientific_validation import validate_candidate_for_promotion
 from ux_models import DirectionSummary, IdeaDerivation, candidate_modification
 
 
@@ -34,6 +35,7 @@ class PrimaryIdeaSelectionResult:
     confidence: str = "low"
     warnings: list[str] = field(default_factory=list)
     automatic_recovery_used: bool = False
+    scientific_gate_results: dict[str, dict[str, object]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -46,6 +48,7 @@ class PrimaryIdeaSelectionResult:
             "confidence": self.confidence,
             "warnings": list(self.warnings),
             "automatic_recovery_used": self.automatic_recovery_used,
+            "scientific_gate_results": dict(self.scientific_gate_results),
         }
 
 
@@ -145,6 +148,9 @@ def select_primary_idea(
     derivations: Sequence[IdeaDerivation], direction: DirectionSummary,
     gap: GapSignature, parent_run: ResearchRun,
     automatic_recovery_used: bool = False,
+    purpose: PurposeContract | None = None,
+    papers: Sequence[Paper] = (),
+    full_audits: dict[str, object] | None = None,
 ) -> PrimaryIdeaSelectionResult:
     """Apply non-overridable gates, then stable weighted ranking."""
     if not candidates:
@@ -154,6 +160,7 @@ def select_primary_idea(
     derivation_by_id = {item.candidate_id: item for item in derivations}
     records: list[CandidateRankingRecord] = []
     rejected: dict[str, list[str]] = {}
+    scientific_results: dict[str, dict[str, object]] = {}
     weights = {
         "user_problem_fit": .12, "evidence_strength": .10,
         "gap_validity": .10, "known_solution_risk": .07,
@@ -168,6 +175,23 @@ def select_primary_idea(
         derivation = derivation_by_id.get(candidate.candidate_id)
         failures = (["missing matching derivation"] if derivation is None else
                     _gate_failures(candidate, derivation, direction, gap, parent_run))
+        if derivation is not None and purpose is not None:
+            scientific = validate_candidate_for_promotion(
+                candidate=candidate, derivation=derivation, direction=direction,
+                gap=gap, purpose=purpose, papers=papers,
+                full_audit=(full_audits or {}).get(candidate.candidate_id),
+            )
+            failures.extend(scientific.failures)
+            if full_audits is not None and candidate.candidate_id not in full_audits:
+                failures.append("full audit unavailable before promotion")
+            scientific_results[candidate.candidate_id] = {
+                "passed": scientific.passed,
+                "failures": list(scientific.failures),
+                "paper_counts": scientific.paper_counts,
+                "paper_roles": [asdict(item) for item in scientific.paper_roles],
+                "modification_spec": asdict(scientific.modification_spec),
+            }
+        failures = list(dict.fromkeys(failures))
         dims = _dimensions(candidate, derivation) if derivation else {}
         score = round(sum(weights[key] * dims.get(key, 0.0) for key in weights), 6)
         if failures:
@@ -183,6 +207,7 @@ def select_primary_idea(
             rejected_candidate_ids=sorted(rejected), rejection_reasons=rejected,
             warnings=["No candidate satisfied every scientific hard gate."],
             automatic_recovery_used=automatic_recovery_used,
+            scientific_gate_results=scientific_results,
         )
     valid.sort(key=lambda item: (-item[0], item[1]))
     winner = valid[0]
@@ -207,6 +232,7 @@ def select_primary_idea(
         "weighted evidence, structural alignment, algorithm specificity, "
         "information availability, feasibility, and falsifiability profile.",
         confidence, automatic_recovery_used=automatic_recovery_used,
+        scientific_gate_results=scientific_results,
     )
 
 

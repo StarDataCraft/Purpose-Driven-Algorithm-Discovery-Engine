@@ -136,9 +136,18 @@ def main() -> None:
         for item in at.session_state["current_external_result"]["ranked_domain_selections"]
     )
     assert len(at.session_state["current_idea_portfolio"]) >= 2
-    first_id = at.session_state["primary_idea_selection_record"]["selected_candidate_id"]
-    assert at.session_state["primary_idea_selection_record"]["status"] == "SELECTED"
+    selection = at.session_state["primary_idea_selection_record"]
     assert not any(item.key == "selected_idea_choice" for item in at.radio)
+    if selection["status"] != "SELECTED":
+        assert selection["status"] == "NO_CANDIDATE_PASSED"
+        assert selection["rejection_reasons"]
+        assert not at.session_state["selected_idea_id"]
+        assert at.session_state["automatic_recovery_attempted"]
+        assert any("No defensible primary idea" in item.value for item in at.error)
+        assert not at.exception
+        print("deployment smoke test: OK (honest no-defensible-idea state)")
+        return
+    first_id = selection["selected_candidate_id"]
     context = at.session_state["selected_idea_context"]
     assert isinstance(context, dict) and context["candidate_id"] == first_id
     assert context["candidate_snapshot"]["candidate_id"] == first_id

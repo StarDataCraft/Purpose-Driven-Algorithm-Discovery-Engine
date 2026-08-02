@@ -330,10 +330,9 @@ def build_direction_portfolio(
             paper = by_paper.get(paper_id)
             text = f"{paper.title} {paper.abstract}".casefold() if paper else ""
             role = (
-                "context for system inference" if paper_id not in direct_paper_ids
-                else "current solution" if any(x in text for x in ("mitigat", "solution", "improv"))
-                else "empirical failure evidence" if any(x in text for x in ("degrad", "fail", "slow"))
-                else "direct gap evidence"
+                "CONTEXTUAL_BACKGROUND" if paper_id not in direct_paper_ids
+                else "CURRENT_SOLUTION" if any(x in text for x in ("mitigat", "solution", "improv"))
+                else "DIRECT_FAILURE_EVIDENCE"
             )
             roles[paper_id] = role
         uncertainties = list(family.rejection_reasons)
@@ -571,11 +570,15 @@ def build_idea_explanation(
     derivation: IdeaDerivation, candidate: AlgorithmCandidate,
     diagram_specs: list[dict[str, Any]],
 ) -> IdeaExplanation:
+    direct_count = sum(
+        role == "DIRECT_FAILURE_EVIDENCE"
+        for role in direction.paper_roles.values()
+    )
     supported = tuple(dict.fromkeys([
         (
-            f"{direction.evidence_bearing_paper_count} paper(s) directly support "
+            f"{direct_count} paper(s) directly support "
             f"the recorded failure condition: {direction.failure_condition}."
-            if direction.evidence_bearing_paper_count
+            if direct_count
             else "Retrieved papers provide context, but no direct paper-stated "
                  "failure sentence supports this direction."
         ),

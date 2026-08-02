@@ -19,7 +19,7 @@ PIPELINE_VERSION = "three-part-ux-v1"
 RUN_MODEL_SCHEMA_VERSION = "run-models-v1"
 UX_SCHEMA_VERSION = "selected-idea-context-v1"
 FINGERPRINT_FILES = (
-    "app.py", "ux_models.py", "direction_generation.py",
+    "app.py", "ux_models.py", "direction_generation.py", "scientific_validation.py",
     "primary_idea_selection.py", "models.py", "gap_consolidation.py",
     "idea_pipeline.py", "external_discovery_pipeline.py",
     "evaluation/schemas.py", "evaluation/audit_models.py",
@@ -77,6 +77,9 @@ def deployment_consistency(root: Path | None = None) -> dict[str, Any]:
         "ux_models.py": manifest.get("ux_models_source_fingerprint", ""),
         "direction_generation.py": manifest.get(
             "direction_generation_source_fingerprint", ""
+        ),
+        "scientific_validation.py": manifest.get(
+            "scientific_validation_source_fingerprint", ""
         ),
         "primary_idea_selection.py": manifest.get(
             "primary_idea_selection_source_fingerprint", ""

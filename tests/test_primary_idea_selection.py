@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
+import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +18,12 @@ from gap_consolidation import (
 from idea_pipeline import derive_ideas_for_direction
 from primary_idea_selection import (
     select_primary_idea, select_primary_idea_with_recovery,
+)
+from models import Paper
+from scientific_validation import (
+    DIRECT_FAILURE_EVIDENCE, IRRELEVANT, build_modification_spec,
+    classify_paper_roles, evidence_count_invariants,
+    validate_candidate_for_promotion,
 )
 from run_models import ResearchRun
 from ux_models import build_direction_portfolio
@@ -155,3 +164,103 @@ def test_tableshift_and_retoken_like_records_are_not_consolidation_compatible(
         failure_type="long-context visual token retrieval latency",
     )
     assert structural_gap_fingerprint(tableshift, purpose) != structural_gap_fingerprint(retoken, purpose)
+
+
+def _invalid_predictive_case(selection_case, purpose):
+    payload = json.loads((
+        Path(__file__).parents[1]
+        / "data/offline_fixtures/predictive_random_forest_invalid.json"
+    ).read_text())
+    candidate = deepcopy(selection_case[3][0])
+    candidate.candidate_name = payload["candidate_name"]
+    candidate.base_algorithm = payload["base_algorithm"]
+    candidate.base_algorithm_family = payload["base_algorithm_family"]
+    candidate.affected_component = "update_rule"
+    candidate.update_rule_delta = payload["update_rule"]
+    candidate.new_state_variables = ["z"]
+    candidate.required_inference_information = payload["required_information"]
+    candidate.novelty_status = payload["novelty_status"]
+    candidate.minimal_experiment.metrics.append("expert activation accuracy")
+    derivation = replace(
+        selection_case[4][0], candidate_id=candidate.candidate_id,
+        mechanism_name=payload["mechanism"], modification_slot="update_rule",
+        structural_correspondences=("surface similarity",),
+    )
+    papers = [Paper(**item) for item in payload["papers"]]
+    gap = replace(selection_case[2], evidence_paper_ids=[papers[0].paper_id])
+    audit = SimpleNamespace(
+        final_decision="EXPLORATORY — evidence_gap_validity, known_solution_novelty, structural_alignment_quality",
+        audit_dimensions=[
+            SimpleNamespace(name="evidence_gap_validity", passed=False),
+            SimpleNamespace(name="known_solution_novelty", passed=False),
+            SimpleNamespace(name="structural_alignment_quality", passed=False),
+        ],
+    )
+    return candidate, derivation, gap, papers, audit
+
+
+def test_predictive_random_forest_regression_cannot_be_primary(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _invalid_predictive_case(selection_case, purpose)
+    run, direction, _, _, _ = selection_case
+    run.selected_gap_snapshot = {"gap_id": gap.gap_id}
+    candidate.selected_gap_snapshot = {"gap_id": gap.gap_id}
+    result = select_primary_idea(
+        candidates=[candidate], derivations=[derivation], direction=direction,
+        gap=gap, parent_run=run, purpose=purpose, papers=papers,
+        full_audits={candidate.candidate_id: audit},
+    )
+    assert result.status == "NO_CANDIDATE_PASSED"
+    assert not result.selected_candidate_id
+    reasons = result.rejection_reasons[candidate.candidate_id]
+    assert any("full audit rejected" in item for item in reasons)
+    assert any("generic Random Forest" in item for item in reasons)
+    assert any("undefined symbol" in item for item in reasons)
+    assert any("true-label residual" in item for item in reasons)
+    assert any("expert activation" in item for item in reasons)
+
+
+def test_regression_paper_roles_and_counts_are_conservative(selection_case, purpose):
+    candidate, _, gap, papers, _ = _invalid_predictive_case(selection_case, purpose)
+    roles = classify_paper_roles(papers, purpose, gap, candidate)
+    by_id = {item.paper_id: item for item in roles}
+    counts = evidence_count_invariants(roles)
+    assert by_id["regression:hardware"].role == IRRELEVANT
+    assert by_id["regression:chimera"].role == IRRELEVANT
+    assert counts["direct_support_count"] <= 1
+    assert counts["direct_support_count"] <= counts["evidence_bearing_paper_count"]
+    assert counts["evidence_bearing_paper_count"] <= counts["automatically_relevant_paper_count"]
+    assert counts["automatically_relevant_paper_count"] <= counts["candidate_paper_count"]
+
+
+def test_surface_similarity_and_undefined_formula_fail(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _invalid_predictive_case(selection_case, purpose)
+    result = validate_candidate_for_promotion(
+        candidate=candidate, derivation=derivation, direction=selection_case[1],
+        gap=gap, purpose=purpose, papers=papers, full_audit=audit,
+    )
+    assert not result.passed
+    assert any("structural_alignment_quality" in item for item in result.failures)
+    assert build_modification_spec(candidate, derivation).unresolved_implementation_choices
+
+
+def test_delayed_label_assumption_removes_prediction_time_failure(selection_case, purpose):
+    candidate, derivation, gap, papers, audit = _invalid_predictive_case(selection_case, purpose)
+    delayed_purpose = replace(
+        purpose, available_inference_information=["features", "delayed feedback labels"],
+    )
+    result = validate_candidate_for_promotion(
+        candidate=candidate, derivation=derivation, direction=selection_case[1],
+        gap=gap, purpose=delayed_purpose, papers=papers, full_audit=audit,
+    )
+    assert not any("true-label residual" in item for item in result.failures)
+
+
+def test_missing_human_review_remains_visible_without_changing_direct_role(
+    selection_case, purpose,
+):
+    candidate, _, gap, papers, _ = _invalid_predictive_case(selection_case, purpose)
+    papers[0].abstract = "Online learning under recurring concept drift has slow recovery."
+    roles = classify_paper_roles(papers, purpose, gap, candidate)
+    direct = next(item for item in roles if item.paper_id == papers[0].paper_id)
+    assert direct.role == DIRECT_FAILURE_EVIDENCE
+    assert direct.human_review_status == "NOT_REVIEWED"

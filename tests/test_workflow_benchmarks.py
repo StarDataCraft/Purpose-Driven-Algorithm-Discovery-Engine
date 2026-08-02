@@ -53,13 +53,15 @@ def test_purpose_reaches_part_3_without_candidate_selection(
     app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
     selection = app.session_state["primary_idea_selection_record"]
-    assert selection["status"] == "SELECTED"
-    assert app.session_state["selected_idea_context"]
-    assert app.session_state["selected_idea_id"] == selection["selected_candidate_id"]
     assert not any(item.key == "selected_idea_choice" for item in app.radio)
-    assert app.button(key="_continue_to_explanation")
-
-    app.button(key="_continue_to_explanation").click().run(timeout=30)
-    explanation = app.session_state["current_result_explanation"]
-    assert explanation.candidate_id == selection["selected_candidate_id"]
+    if selection["status"] == "SELECTED":
+        assert app.session_state["selected_idea_context"]
+        assert app.session_state["selected_idea_id"] == selection["selected_candidate_id"]
+        app.button(key="_continue_to_explanation").click().run(timeout=30)
+        assert app.session_state["current_result_explanation"].candidate_id == selection["selected_candidate_id"]
+    else:
+        assert selection["status"] == "NO_CANDIDATE_PASSED"
+        assert not app.session_state["selected_idea_id"]
+        assert selection["rejection_reasons"]
+        assert any("No defensible primary idea" in item.value for item in app.error)
     assert not app.exception

@@ -10,7 +10,7 @@ def build_experiment(purpose: PurposeContract, gap: GapSignature,
     failure = gap.failure_type.casefold()
     if "drift" in failure:
         dataset, stressor = "SEA/Rotating Hyperplane plus an ordered real tabular stream", "recurring concept drift"
-        extra = ["recovery time", "forgetting", "expert activation accuracy"]
+        extra = ["recovery time", "stationary-period accuracy", "false drift actions", "update latency"]
     elif "missing" in failure:
         dataset, stressor = "OpenML tabular dataset with controlled masks", "MCAR, MAR, MNAR and train-test missingness mismatch"
         extra = ["AUROC", "expected calibration error", "robustness curve"]
@@ -43,7 +43,11 @@ def build_experiment(purpose: PurposeContract, gap: GapSignature,
         baselines=baselines, ablations=ablations, metrics=metrics,
         compute_reporting=["wall-clock time", "peak memory", "inference latency", "parameter count"],
         seeds=[11, 23, 47, 89, 131],
-        success_rule=f"pre-registered improvement in {purpose.primary_metric} with no material loss in protected metrics",
+        success_rule=(
+            f"pre-registered improvement in {purpose.primary_metric}; recovery time is the "
+            "number of labeled observations required to return within the registered "
+            "fraction of pre-drift performance, with no material protected-metric loss"
+        ),
         failure_rule="confidence interval includes the minimum effect, or shuffled/fixed ablation matches the full method",
         information_audit={
             "training": purpose.available_training_information,

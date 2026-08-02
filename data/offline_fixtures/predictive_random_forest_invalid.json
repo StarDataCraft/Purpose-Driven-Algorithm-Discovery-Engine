@@ -1,0 +1,18 @@
+{
+  "candidate_name": "Predictive Random Forest",
+  "base_algorithm": "Random Forest",
+  "base_algorithm_family": "ensemble",
+  "mechanism": "predictive error correction",
+  "update_rule": "z[t+1] = Fz[t] + K(y[t] - Hz[t])",
+  "failure": "recurring concept drift with slow recovery",
+  "ordinary_prediction_information": ["features", "model prediction"],
+  "required_information": ["true label", "prediction residual"],
+  "alignment": "surface similarity",
+  "evidence_status": "insufficient direct support",
+  "novelty_status": "INSUFFICIENT_SEARCH",
+  "papers": [
+    {"paper_id":"regression:tinyml","title":"Tiny Machine Learning for Concept Drift","abstract":"A survey of compact deployment and concept drift monitoring.","year":2024,"source":"openalex","estimated_relevance_label":"LOW"},
+    {"paper_id":"regression:hardware","title":"Hardware-aware training for large-scale and diverse deep learning inference workloads using in-memory computing-based accelerators","abstract":"Accelerator-aware training improves throughput for deep neural inference workloads.","year":2024,"source":"openalex","estimated_relevance_label":"IRRELEVANT"},
+    {"paper_id":"regression:chimera","title":"Chimera: Designing and Chinchilla-Scaling Hybrid Visual Diffusion Transformers","abstract":"A hybrid visual diffusion transformer scales image generation.","year":2025,"source":"arxiv","estimated_relevance_label":"IRRELEVANT"}
+  ]
+}

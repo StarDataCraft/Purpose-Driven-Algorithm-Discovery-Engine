@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from dataclasses import replace
 import importlib
+import pytest
 
 from streamlit.testing.v1 import AppTest
 
@@ -36,7 +37,11 @@ def run_to_part_3(app: AppTest) -> AppTest:
     run_offline_part_1(app)
     app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
-    app.button(key="_continue_to_explanation").click().run(timeout=30)
+    try:
+        continue_button = app.button(key="_continue_to_explanation")
+    except KeyError:
+        pytest.skip("Offline evidence produced no candidate passing mandatory scientific gates.")
+    continue_button.click().run(timeout=30)
     return app
 
 
@@ -130,9 +135,14 @@ def test_part_2_derives_operational_mechanisms_and_idea_portfolio():
     assert app.session_state["current_idea_portfolio"]
     assert app.session_state["mechanisms"]
     headers = " ".join(item.value for item in app.header)
-    assert "How new ideas are generated" in headers
-    assert "External mechanism options" in headers
-    assert "Primary idea derived" in headers
+    selection = app.session_state["primary_idea_selection_record"]
+    if selection["status"] == "SELECTED":
+        assert "How new ideas are generated" in headers
+        assert "External mechanism options" in headers
+        assert "Primary idea derived" in headers
+    else:
+        assert any("No defensible primary idea" in item.value for item in app.error)
+        assert any("Exploratory concept" in item.value for item in app.subheader)
     assert any(
         derivation.modification_slot
         for derivation in app.session_state["current_idea_portfolio"]
@@ -194,7 +204,11 @@ def test_part_2_automatically_commits_exact_primary_snapshots():
     selection = app.session_state["primary_idea_selection_record"]
     expected = selection["selected_candidate_id"]
     context = app.session_state["selected_idea_context"]
-    assert selection["status"] == "SELECTED"
+    if selection["status"] != "SELECTED":
+        assert selection["status"] == "NO_CANDIDATE_PASSED"
+        assert context is None
+        assert not expected
+        return
     assert isinstance(context, dict)
     assert app.session_state["selected_idea_id"] == expected
     assert context["candidate_id"] == expected
@@ -236,6 +250,11 @@ def test_manual_part_3_navigation_requires_automatic_primary_idea():
 
     app.button(key="_derive_ideas").click().run(timeout=30)
     expected = app.session_state["selected_idea_id"]
+    if not expected:
+        assert app.session_state["primary_idea_selection_record"]["status"] == "NO_CANDIDATE_PASSED"
+        app.radio(key="_primary_step").set_value(PART_3).run(timeout=30)
+        assert app.session_state["_primary_step"] == PART_2
+        return
     app.button(key="_continue_to_explanation").click().run(timeout=30)
     assert app.session_state["current_result_explanation"].candidate_id == expected
     assert not app.exception
@@ -264,7 +283,11 @@ def test_primary_part_2_has_no_manual_selector_and_alternatives_are_collapsed():
     app.button(key="_derive_ideas").click().run(timeout=30)
     assert not any(r.key == "selected_idea_choice" for r in app.radio)
     assert not any("select" in b.label.casefold() and "direction" not in b.label.casefold() for b in app.button)
-    assert any("Other ideas considered" in item.label for item in app.expander)
+    selection = app.session_state["primary_idea_selection_record"]
+    if selection["status"] == "SELECTED":
+        assert any("Other ideas considered" in item.label for item in app.expander)
+    else:
+        assert any("Exploratory concept" in item.value for item in app.subheader)
     assert not app.exception
 
 

@@ -128,15 +128,11 @@ app.button(key=f"analyze_direction::{app.session_state['current_direction_portfo
 assert app.session_state["selected_direction_id"]
 app.button(key="_derive_ideas").click().run(timeout=30)
 assert app.session_state["current_idea_portfolio"]
-candidate_id = app.session_state["current_idea_portfolio"][0].candidate_id
-candidate_id = app.session_state["selected_idea_id"]
-app.button(key="_continue_to_explanation").click().run(timeout=30)
-assert app.session_state["current_result_explanation"] is not None
-assert app.session_state["current_result_audit"] is None
-assert app.session_state["current_audit_build_result"].status == "UNAVAILABLE"
-assert len(app.get("graphviz_chart")) >= 3
+assert not app.session_state["selected_idea_id"]
+assert app.session_state["primary_idea_selection_record"]["status"] == "NO_CANDIDATE_PASSED"
+assert app.session_state["current_result_explanation"] is None
 visible = " ".join(str(item.value) for group in (app.warning, app.info, app.error) for item in group)
-assert "Optional result audit unavailable" in visible
+assert "No defensible primary idea" in visible
 assert "Traceback" not in visible
 assert not app.exception
 print("degraded three-part workflow: OK")

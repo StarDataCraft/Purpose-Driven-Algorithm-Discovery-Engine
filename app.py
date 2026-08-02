@@ -2667,15 +2667,30 @@ def render_related_papers(direction: object) -> None:
             ).append(paper)
     if not grouped:
         st.caption("No paper-level record is available for this direction.")
+    labels = {
+        "DIRECT_FAILURE_EVIDENCE": "Direct gap evidence",
+        "EXTERNAL_MECHANISM_EVIDENCE": "External mechanism evidence",
+        "NEAREST_METHOD": "Nearest known methods",
+        "BENCHMARK": "Experiment and benchmark references",
+        "CONTEXTUAL_BACKGROUND": "Context only",
+        "CURRENT_SOLUTION": "Nearest known methods",
+        "PARTIAL_MITIGATION": "Nearest known methods",
+    }
+    if "DIRECT_FAILURE_EVIDENCE" not in grouped:
+        st.warning("No directly relevant failure-evidence paper is available.")
     for role, records in grouped.items():
-        st.markdown(f"**{role.title()}**")
+        if role == "IRRELEVANT":
+            continue
+        st.markdown(f"**{labels.get(role, role.replace('_', ' ').title())}**")
         for paper in records:
             st.markdown(
                 f"- [{paper.title}]({paper.url or paper.doi or '#'}) "
                 f"({paper.year}, {paper.source})  \n"
                 f"  Estimated: `{paper.estimated_relevance_label}` · "
                 f"Human review: `{paper.reviewed_relevance_label or 'not reviewed'}`  \n"
-                f"  Evidence: {excerpts.get(paper.paper_id, 'Connected through the canonical gap family.')}"
+                f"  Supported claim: {('Recorded failure condition' if role == 'DIRECT_FAILURE_EVIDENCE' else 'Context or prior method only')}  \n"
+                f"  Evidence: {excerpts.get(paper.paper_id, 'No direct failure excerpt; included for its stated role.')}  \n"
+                f"  Reason included: {role.replace('_', ' ').lower()}"
             )
 
 
@@ -2898,7 +2913,7 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
         fixture_loader=lambda: load_fixture("external_papers.json"),
         progress_callback=progress_callback if callable(progress_callback) else None,
     )
-    recovery_used = False
+    recovery_used = bool(st.session_state.automatic_recovery_attempted)
     if not result.portfolio and not st.session_state.automatic_recovery_attempted:
         st.session_state.automatic_recovery_attempted = True
         recovery_used = True
@@ -2928,11 +2943,60 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
     st.session_state.candidate_portfolio = result.portfolio
     st.session_state.direction_families = result.direction_families
     st.session_state.current_idea_portfolio = result.derivations
+    audit_capability = load_result_audit_capability(strict=False)
+    full_audits = {}
+    if audit_capability.available and audit_capability.audit_complete_result:
+        mechanism_by_id = {
+            item.mechanism_id: item for item in result.external_result.mechanisms
+        }
+        alignment_by_key = {
+            (item.gap_id, item.mechanism_id): item
+            for item in result.external_result.alignments
+        }
+        derivation_by_candidate = {
+            item.candidate_id: item for item in result.derivations
+        }
+        for candidate in result.portfolio:
+            derivation = derivation_by_candidate.get(candidate.candidate_id)
+            mechanism = mechanism_by_id.get(derivation.mechanism_id) if derivation else None
+            alignment = alignment_by_key.get((gap.gap_id, derivation.mechanism_id)) if derivation else None
+            if not derivation or not mechanism or not alignment:
+                continue
+            try:
+                full_audits[candidate.candidate_id] = audit_capability.audit_complete_result(
+                    purpose=st.session_state.purpose, run=run,
+                    direction_id=direction.direction_id,
+                    gap_family_id=derivation.gap_family_id, gap=gap,
+                    candidate=candidate, mechanism=mechanism, alignment=alignment,
+                    papers=[*st.session_state.ml_papers, *result.external_result.papers],
+                    pipeline_version=derivation.pipeline_version,
+                )
+            except Exception as exc:
+                result.external_result.warnings.append(
+                    f"Pre-promotion audit failed for {candidate.candidate_id}: {type(exc).__name__}"
+                )
     selection = select_primary_idea(
         candidates=result.portfolio, derivations=result.derivations,
         direction=direction, gap=gap, parent_run=run,
         automatic_recovery_used=recovery_used,
+        purpose=st.session_state.purpose,
+        papers=[*st.session_state.ml_papers, *result.external_result.papers],
+        full_audits=full_audits,
     )
+    if selection.status != "SELECTED" and not recovery_used:
+        st.session_state.automatic_recovery_attempted = True
+        run.search_policy = SearchPolicy(
+            requested_mode=policy.requested_mode,
+            sources=policy.sources, allow_cache=policy.allow_cache,
+            force_fresh=policy.force_fresh or policy.requested_mode.upper() == "LIVE",
+            allow_offline_fallback=False,
+            maximum_per_query=min(12, policy.maximum_per_query + 2),
+            maximum_total=min(100, policy.maximum_total + 20),
+        ).to_dict()
+        st.session_state.current_external_result = None
+        st.session_state.current_idea_portfolio = []
+        st.session_state.candidate_portfolio = []
+        return build_current_idea_portfolio(progress_callback)
     st.session_state.primary_idea_selection_record = selection.to_dict()
     if selection.status == "SELECTED":
         commit_idea_selection(
@@ -2947,6 +3011,11 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
         "automatic_recovery_attempted": recovery_used,
         "primary_selection_status": selection.status,
         "candidate_rejection_reasons": selection.rejection_reasons,
+        "gate_failure_counts": dict(Counter(
+            reason.split(":", 1)[0]
+            for reasons in selection.rejection_reasons.values()
+            for reason in reasons
+        )),
     }
     generate_quality_warnings(run)
 
@@ -3133,6 +3202,38 @@ def analyze_gap_page() -> None:
                 "Migration": st.session_state.external_result_migration_message or "None",
             })
     ideas = st.session_state.current_idea_portfolio
+    selection = st.session_state.primary_idea_selection_record or {}
+    if ideas and selection and selection.get("status") != "SELECTED":
+        diagnostics = st.session_state.candidate_run_diagnostics or {}
+        st.error("No defensible primary idea was derived.")
+        records = selection.get("ranking_records", [])
+        strongest = max(
+            records, key=lambda item: item.get("weighted_score", 0), default={},
+        )
+        candidates_by_id = {
+            item.candidate_id: item for item in st.session_state.candidate_portfolio
+        }
+        strongest_candidate = candidates_by_id.get(strongest.get("candidate_id"))
+        render_fields({
+            "Automatic evaluation": "No candidate passed all mandatory gates",
+            "Candidates generated": len(st.session_state.candidate_portfolio),
+            "Candidates rejected": len(selection.get("rejected_candidate_ids", [])),
+            "Gate failure counts": diagnostics.get("gate_failure_counts", {}),
+            "Strongest rejected candidate": getattr(strongest_candidate, "candidate_name", "None"),
+            "Exact rejection reasons": strongest.get("gate_failures", []),
+            "Bounded recovery attempted": "Yes" if diagnostics.get("automatic_recovery_attempted") else "No",
+        })
+        if strongest_candidate:
+            st.subheader("Exploratory concept — not promoted")
+            render_fields({
+                "Title": strongest_candidate.candidate_name,
+                "Why not promoted": strongest.get("gate_failures", []),
+                "What would make it eligible": (
+                    "Obtain direct evidence, resolve prior art, define all information "
+                    "and algorithm actions, and pass structural and matched-compute tests."
+                ),
+            })
+        return
     if not ideas:
         diagnostics = st.session_state.candidate_run_diagnostics or {}
         selection = st.session_state.primary_idea_selection_record or {}
