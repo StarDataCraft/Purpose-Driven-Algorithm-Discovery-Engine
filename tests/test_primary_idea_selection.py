@@ -23,6 +23,7 @@ from primary_idea_selection import (
 from models import Paper, PurposeContract
 from scientific_validation import (
     DIRECT_FAILURE_EVIDENCE, IRRELEVANT, IdeaMaturityLevel, build_modification_spec,
+    build_capability_operator_plan,
     classify_paper_roles, evidence_count_invariants,
     validate_candidate_for_promotion,
 )
@@ -295,7 +296,11 @@ def _calibrated_case(selection_case, purpose):
     candidate.base_algorithm = "Adaptive online tree ensemble"
     candidate.base_algorithm_family = "online tree ensemble"
     candidate.alignment_acceptance = "STRONG"
-    candidate.update_rule_delta = "After delayed feedback, update bounded per-tree reliability state and adjust ensemble weights."
+    candidate.update_rule_delta = (
+        "Recognize a recurring regime, retain prior specialist state, select and verify "
+        "the matching expert, route or weight predictions, and fall back to the base "
+        "ensemble when verification fails after delayed feedback."
+    )
     candidate.new_state_variables = ["bounded per-tree reliability", "regime-state estimate"]
     candidate.required_inference_information = ["current predictions"]
     candidate.required_training_information = ["delayed feedback labels"]
@@ -375,3 +380,16 @@ def test_no_human_review_is_not_a_fatal_gate(selection_case, purpose):
         gap=gap, purpose=purpose, papers=papers, full_audit=audit,
     )
     assert not any("human review" in item for item in result.fatal_failures)
+
+
+def test_reactivate_specialists_expands_generic_update_rule_into_slot_bundle(
+    selection_case, purpose,
+):
+    candidate, derivation, _, _, _ = _calibrated_case(selection_case, purpose)
+    assert derivation.modification_slot == "update_rule"
+    plan = build_capability_operator_plan(candidate, derivation)
+    assert len(plan.selected_slot_bundle) > 1
+    assert "regime_recognition" in plan.candidate_slots
+    assert "bounded_memory" in plan.candidate_slots
+    assert any("routing" in slot or "aggregation" in slot for slot in plan.selected_slot_bundle)
+    assert plan.compatibility_score > 0

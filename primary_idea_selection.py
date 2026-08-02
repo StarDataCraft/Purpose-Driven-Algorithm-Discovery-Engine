@@ -5,14 +5,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Sequence
 
+from idea_maturity import (
+    AssessmentIssue, AssessmentSeverity, IdeaMaturityLevel, issue, maturity_value,
+)
 from models import AlgorithmCandidate, GapSignature, Paper, PurposeContract
 from primary_idea_contracts import (
     PRIMARY_IDEA_SELECTION_API_VERSION, PrimaryIdeaSelectionRequest,
 )
 from run_models import ResearchRun
-from scientific_validation import (
-    IdeaMaturityLevel, MaturityLimiter, validate_candidate_for_promotion,
-)
+from scientific_validation import validate_candidate_for_promotion
 from ux_models import DirectionSummary, IdeaDerivation, candidate_modification
 
 
@@ -47,6 +48,7 @@ class PrimaryIdeaSelectionResult:
     scientific_gate_results: dict[str, dict[str, object]] = field(default_factory=dict)
     maturity_distribution: dict[str, int] = field(default_factory=dict)
     exploratory_candidate_id: str = ""
+    selected_maturity_level: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -60,8 +62,15 @@ class PrimaryIdeaSelectionResult:
             "warnings": list(self.warnings),
             "automatic_recovery_used": self.automatic_recovery_used,
             "scientific_gate_results": dict(self.scientific_gate_results),
+            "scientific_assessments": dict(self.scientific_gate_results),
+            "fatal_rejections": dict(self.rejection_reasons),
+            "maturity_limiters": {
+                candidate_id: assessment.get("maturity_limiters", [])
+                for candidate_id, assessment in self.scientific_gate_results.items()
+            },
             "maturity_distribution": dict(self.maturity_distribution),
             "exploratory_candidate_id": self.exploratory_candidate_id,
+            "selected_maturity_level": self.selected_maturity_level,
         }
 
 
@@ -72,9 +81,9 @@ def _known(value: str) -> bool:
 def _contract_assessment(
     candidate: AlgorithmCandidate, derivation: IdeaDerivation,
     direction: DirectionSummary, gap: GapSignature, run: ResearchRun,
-) -> tuple[list[str], list[MaturityLimiter]]:
+) -> tuple[list[str], list[AssessmentIssue]]:
     failures: list[str] = []
-    limiters: list[MaturityLimiter] = []
+    limiters: list[AssessmentIssue] = []
     if not run.run_id or candidate.research_run_id != run.run_id:
         failures.append("invalid parent ResearchRun")
     if direction.parent_run_id != run.run_id or derivation.direction_id != direction.direction_id:
@@ -82,10 +91,11 @@ def _contract_assessment(
     if gap.gap_id != candidate.gap_id or derivation.selected_gap_snapshot.get("gap_id") != gap.gap_id:
         failures.append("invalid selected gap")
     if run.evidence_bearing_paper_count < 1 or direction.evidence_bearing_paper_count < 1:
-        limiters.append(MaturityLimiter(
+        limiters.append(issue(
+            "problem_evidence_missing", AssessmentSeverity.MAJOR_LIMITER,
             "problem evidence: no evidence-bearing ML papers recorded",
-            "A research-worthy hypothesis needs direct problem evidence.",
-            "Retrieve and review a task-compatible problem paper.",
+            consequence="A research-worthy hypothesis needs direct problem evidence.",
+            repair_option="Retrieve and review a task-compatible problem paper.",
         ))
     if not run.external_paper_ids:
         failures.append("external evidence: no external mechanism evidence")
@@ -125,28 +135,32 @@ def _contract_assessment(
         failures.append("primary metric is unsupported")
     experiment = candidate.minimal_experiment
     if not all((experiment.hypothesis, experiment.success_rule, experiment.failure_rule)):
-        limiters.append(MaturityLimiter(
+        limiters.append(issue(
+            "experiment_incomplete", AssessmentSeverity.MAJOR_LIMITER,
             "experiment design: minimal experiment is incomplete",
-            "The causal uncertainty cannot yet be resolved efficiently.",
-            "Specify hypothesis, success threshold, failure threshold, and discriminating ablations.",
+            consequence="The causal uncertainty cannot yet be resolved efficiently.",
+            repair_option="Specify hypothesis, success threshold, failure threshold, and discriminating ablations.",
         ))
     if not candidate.kill_criterion and not experiment.failure_rule:
-        limiters.append(MaturityLimiter(
+        limiters.append(issue(
+            "kill_criterion_missing", AssessmentSeverity.MAJOR_LIMITER,
             "experiment design: missing kill criterion",
-            "An attractive result could otherwise evade falsification.",
-            "Define the result that abandons or redesigns the mechanism.",
+            consequence="An attractive result could otherwise evade falsification.",
+            repair_option="Define the result that abandons or redesigns the mechanism.",
         ))
     if not candidate.novelty_status or not candidate.nearest_known_method_patterns:
-        limiters.append(MaturityLimiter(
+        limiters.append(issue(
+            "prior_art_absent", AssessmentSeverity.MAJOR_LIMITER,
             "prior art: targeted known-solution status is absent",
-            "Duplicate risk remains unresolved.",
-            "Search problem, slot, mechanism-slot combination, and cross-task analogues.",
+            consequence="Duplicate risk remains unresolved.",
+            repair_option="Search problem, slot, mechanism-slot combination, and cross-task analogues.",
         ))
     if not derivation.uncertainties and not candidate.scores.missing_evidence:
-        limiters.append(MaturityLimiter(
+        limiters.append(issue(
+            "uncertainty_record_absent", AssessmentSeverity.MINOR_LIMITER,
             "uncertainty: explicit uncertainty record is absent",
-            "The research plan may overstate confidence.",
-            "Record the weakest evidence link and fastest invalidation test.", "MINOR_LIMITER",
+            consequence="The research plan may overstate confidence.",
+            repair_option="Record the weakest evidence link and fastest invalidation test.",
         ))
     if candidate.scores.rejection_flags:
         failures.extend(f"candidate rejection flag: {item}" for item in candidate.scores.rejection_flags)
@@ -241,7 +255,7 @@ def select_primary_idea(
     for candidate in candidates:
         derivation = derivation_by_id.get(candidate.candidate_id)
         failures: list[str] = ["provenance: missing matching derivation"] if derivation is None else []
-        contract_limiters: list[MaturityLimiter] = []
+        contract_limiters: list[AssessmentIssue] = []
         if derivation is not None:
             contract_failures, contract_limiters = _contract_assessment(
                 candidate, derivation, direction, gap, parent_run,
@@ -257,20 +271,25 @@ def select_primary_idea(
                 gap=gap, purpose=purpose, papers=papers,
                 full_audit=(full_audits or {}).get(candidate.candidate_id),
             )
-            failures.extend(scientific.fatal_failures)
-            maturity_limiters.extend(scientific.maturity_limiters)
+            failures.extend(item.issue for item in scientific.fatal_failures)
+            maturity_limiters.extend((*scientific.major_limiters, *scientific.minor_limiters))
             maturity = IdeaMaturityLevel.REJECTED if failures else scientific.maturity_level
             if full_audits is not None and candidate.candidate_id not in full_audits:
-                maturity_limiters.append(MaturityLimiter(
+                maturity_limiters.append(issue(
+                    "full_audit_unavailable", AssessmentSeverity.MAJOR_LIMITER,
                     "full audit: unavailable for this candidate",
-                    "Independent review dimensions have not been calibrated.",
-                    "Run the complete audit before claiming test-ready maturity.",
+                    consequence="Independent review dimensions have not been calibrated.",
+                    repair_option="Run the complete audit before claiming test-ready maturity.",
                 ))
-                maturity = min(maturity, IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS)
+                if maturity_value(maturity) > maturity_value(IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS):
+                    maturity = IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS
             scientific_results[candidate.candidate_id] = {
                 "passed": scientific.passed,
-                "fatal_failures": list(scientific.fatal_failures),
-                "maturity_limiters": [asdict(item) for item in scientific.maturity_limiters],
+                "fatal_failures": [asdict(item) for item in scientific.fatal_failures],
+                "major_limiters": [asdict(item) for item in scientific.major_limiters],
+                "minor_limiters": [asdict(item) for item in scientific.minor_limiters],
+                "informational_notes": [asdict(item) for item in scientific.informational_notes],
+                "maturity_limiters": [asdict(item) for item in (*scientific.major_limiters, *scientific.minor_limiters)],
                 "strengths": list(scientific.strengths),
                 "maturity_level": scientific.maturity_level.name,
                 "maturity_reason": scientific.maturity_reason,
@@ -278,6 +297,16 @@ def select_primary_idea(
                 "confidence_by_dimension": scientific.confidence_by_dimension,
                 "open_design_choices": [asdict(item) for item in scientific.open_design_choices],
                 "repairs_applied": [asdict(item) for item in scientific.repairs_applied],
+                "capability_operator_plan": asdict(scientific.capability_slot_assessment),
+                "assessment_levels": {
+                    "problem_evidence": scientific.problem_evidence_level,
+                    "mechanism_evidence": scientific.mechanism_evidence_level,
+                    "alignment": scientific.alignment_level,
+                    "prior_art": scientific.prior_art_level,
+                    "implementation": scientific.implementation_level,
+                    "information_feasibility": scientific.information_feasibility_level,
+                    "experiment": scientific.experiment_level,
+                },
                 "paper_counts": scientific.paper_counts,
                 "paper_roles": [asdict(item) for item in scientific.paper_roles],
                 "modification_spec": asdict(scientific.modification_spec),
@@ -288,7 +317,7 @@ def select_primary_idea(
         if failures:
             maturity = IdeaMaturityLevel.REJECTED
             rejected[candidate.candidate_id] = failures
-        elif maturity >= IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS:
+        elif maturity_value(maturity) >= maturity_value(IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS):
             eligible.append((maturity, score, candidate.candidate_id, candidate, derivation, dims))
         else:
             exploratory.append((score, candidate.candidate_id, candidate, derivation, dims))
@@ -313,6 +342,7 @@ def select_primary_idea(
                 automatic_recovery_used=automatic_recovery_used,
                 scientific_gate_results=scientific_results,
                 maturity_distribution=distribution, exploratory_candidate_id=best[1],
+                selected_maturity_level=IdeaMaturityLevel.EXPLORATORY_HYPOTHESIS.value,
             )
         return PrimaryIdeaSelectionResult(
             "NO_COHERENT_IDEA", ranking_records=records,
@@ -321,12 +351,12 @@ def select_primary_idea(
             automatic_recovery_used=automatic_recovery_used,
             scientific_gate_results=scientific_results, maturity_distribution=distribution,
         )
-    highest = max(item[0] for item in eligible)
+    highest = max((item[0] for item in eligible), key=maturity_value)
     pool = [item for item in eligible if item[0] == highest]
     fronts = _pareto_fronts([(item[2], item[5]) for item in pool])
     pool.sort(key=lambda item: (fronts[item[2]], -item[1], item[2]))
     winner = pool[0]
-    all_ranked = sorted(eligible, key=lambda item: (-int(item[0]), fronts.get(item[2], 99), -item[1], item[2]))
+    all_ranked = sorted(eligible, key=lambda item: (-maturity_value(item[0]), fronts.get(item[2], 99), -item[1], item[2]))
     ranks = {item[2]: index + 1 for index, item in enumerate(all_ranked)}
     ranked_records = []
     for record in records:
@@ -350,6 +380,7 @@ def select_primary_idea(
         "non-dominated quality ranking and explicit minimum scientific floors.",
         confidence, automatic_recovery_used=automatic_recovery_used,
         scientific_gate_results=scientific_results, maturity_distribution=distribution,
+        selected_maturity_level=highest.value,
     )
 
 

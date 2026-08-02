@@ -25,6 +25,22 @@ from ux_models import DirectionSummary
 EXTERNAL_DISCOVERY_SCHEMA_VERSION = "external-discovery-v2"
 
 
+def external_evidence_count_invariants(
+    candidate_papers: int, relevant_papers: int, mechanism_evidence_papers: int,
+) -> dict[str, int]:
+    """Validate the promotion-safe subset relationship for external evidence."""
+    if not 0 <= mechanism_evidence_papers <= relevant_papers <= candidate_papers:
+        raise ValueError(
+            "External evidence invariant failed: operational mechanism evidence "
+            "must be a subset of external-problem relevant candidate papers."
+        )
+    return {
+        "external_candidate_paper_count": candidate_papers,
+        "external_problem_relevant_paper_count": relevant_papers,
+        "operational_mechanism_evidence_paper_count": mechanism_evidence_papers,
+    }
+
+
 @dataclass(frozen=True)
 class SearchPolicy:
     requested_mode: str
@@ -209,8 +225,15 @@ def discover_external_mechanisms_for_direction(
         openalex_client_instance=openalex_client,
         openalex_budget=openalex_budget,
     )
+    apply_external_problem_relevance(papers, signature)
+    retrieval_run.finalize_from_papers(papers)
+    initial_relevant_papers = [
+        paper for paper in papers if paper.estimated_relevance_label in {
+            "ESTIMATED_HIGH", "ESTIMATED_MEDIUM",
+        }
+    ]
     stage_two_used = False
-    initial_mechanisms, _ = extract_mechanisms(papers)
+    initial_mechanisms, _ = extract_mechanisms(initial_relevant_papers)
     domain_items = list(all_queries_by_domain.items())
     stage_two_pairs = [
         (domain, domain_queries[2])
@@ -299,7 +322,12 @@ def discover_external_mechanisms_for_direction(
         errors.append("External literature retrieval produced no usable papers.")
 
     progress(55, "4/6 Extracting mechanisms")
-    mechanisms, rejected_mechanisms = extract_mechanisms(papers)
+    relevant_papers = [
+        paper for paper in papers if paper.estimated_relevance_label in {
+            "ESTIMATED_HIGH", "ESTIMATED_MEDIUM",
+        }
+    ]
+    mechanisms, rejected_mechanisms = extract_mechanisms(relevant_papers)
     mechanisms = cross_domain_only(mechanisms)
     if not mechanisms and requested_mode == "OFFLINE_FIXTURE":
         mechanisms = cross_domain_only(load_mechanism_seeds())
@@ -320,13 +348,13 @@ def discover_external_mechanisms_for_direction(
         errors.append("Mechanisms were extracted, but no structural alignment passed hard validation.")
 
     retrieved_paper_ids = {paper.paper_id for paper in papers}
-    relevant_paper_ids = {
-        paper.paper_id for paper in papers
-        if paper.estimated_relevance_label in {"ESTIMATED_HIGH", "ESTIMATED_MEDIUM"}
-    }
+    relevant_paper_ids = {paper.paper_id for paper in relevant_papers}
     mechanism_paper_ids = ({
         paper_id for mechanism in mechanisms for paper_id in mechanism.evidence_paper_ids
     } & retrieved_paper_ids & relevant_paper_ids)
+    evidence_counts = external_evidence_count_invariants(
+        len(papers), len(relevant_papers), len(mechanism_paper_ids),
+    )
     if (retrieval_run.automatically_relevant_paper_count == 0
             and mechanism_paper_ids):
         warnings.append(
@@ -371,6 +399,9 @@ def discover_external_mechanisms_for_direction(
         "queries_by_domain": queries_by_domain,
         "paper_ids": parent_run.external_paper_ids,
         "mechanism_bearing_paper_ids": parent_run.mechanism_bearing_paper_ids,
+        **evidence_counts,
+        "mechanism_record_count": len(mechanisms) + len(rejected_mechanisms),
+        "validated_mechanism_count": len(mechanisms),
         "source_results": [item.to_dict() for item in retrieval_run.source_results],
         "mechanism_count": len(mechanisms),
         "alignment_count": len(accepted),
@@ -413,6 +444,9 @@ def discover_external_mechanisms_for_direction(
                 "mechanism_extraction", "structural_alignment",
             ],
             "query_count": len(queries), "paper_count": len(papers),
+            **evidence_counts,
+            "mechanism_record_count": len(mechanisms) + len(rejected_mechanisms),
+            "validated_mechanism_count": len(mechanisms),
             "mechanism_count": len(mechanisms),
             "accepted_alignment_count": len(accepted),
             "adaptive_stage_two_used": stage_two_used,

@@ -245,7 +245,7 @@ def test_manual_part_3_navigation_requires_automatic_primary_idea():
     app.button(key=f"analyze_direction::{app.session_state['current_direction_portfolio'][0].direction_id}").click().run(timeout=30)
     app.radio(key="_primary_step").set_value(PART_3).run(timeout=30)
     assert app.session_state["_primary_step"] == PART_2
-    assert any("No validated primary idea" in item.value for item in app.warning)
+    assert any("Run Part 2 analysis first" in item.value for item in app.warning)
 
     app.button(key="_derive_ideas").click().run(timeout=30)
     expected = app.session_state["selected_idea_id"]

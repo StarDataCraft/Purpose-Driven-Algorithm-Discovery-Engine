@@ -73,7 +73,10 @@ from diagram_builders import (
     mechanism_transfer_spec,
 )
 from external_discovery_pipeline import SearchPolicy
-from session_schema import SESSION_STATE_SCHEMA_VERSION, resolve_external_result
+from session_schema import (
+    SESSION_STATE_SCHEMA_VERSION, normalize_primary_selection_record,
+    resolve_external_result,
+)
 from idea_pipeline import derive_ideas_for_direction
 from primary_idea_contracts import (
     PRIMARY_IDEA_SELECTION_API_VERSION, PrimaryIdeaSelectionRequest,
@@ -311,6 +314,10 @@ def initialize_state() -> None:
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+    if st.session_state.primary_idea_selection_record is not None:
+        st.session_state.primary_idea_selection_record = normalize_primary_selection_record(
+            st.session_state.primary_idea_selection_record
+        )
     migrate_external_session_state()
 
 
@@ -2275,6 +2282,10 @@ def _selection_context(
     *, candidate: object, derivation: object, direction: object, gap: object,
     run: ResearchRun, active_direction_id: str, active_gap_id: str,
     resolution_source: str = "immutable snapshot",
+    maturity_level: str = "LEGACY_UNASSESSED",
+    maturity_limiters: tuple[dict[str, object], ...] = (),
+    repair_options: tuple[str, ...] = (),
+    open_design_choices: tuple[dict[str, object], ...] = (),
 ) -> SelectedIdeaContext:
     """Validate and construct a selection without mutating session state."""
     errors = []
@@ -2323,6 +2334,10 @@ def _selection_context(
         resolution_source=resolution_source,
         validation_status="LEGACY_CONTEXT" if partial else "COMPLETE",
         validation_notes=tuple(partial),
+        maturity_level=maturity_level,
+        maturity_limiters=maturity_limiters,
+        repair_options=repair_options,
+        open_design_choices=open_design_choices,
     )
 
 
@@ -2332,11 +2347,20 @@ def commit_idea_selection(
 ) -> SelectedIdeaContext:
     """Atomically commit a complete Part 2 → Part 3 selection."""
     target = st.session_state if state is None else state
+    selection_record = target.get("primary_idea_selection_record") or {}
+    assessment = selection_record.get(
+        "scientific_assessments", selection_record.get("scientific_gate_results", {})
+    ).get(candidate.candidate_id, {})
     context = _selection_context(
         candidate=candidate, derivation=derivation, direction=direction,
         gap=gap, run=run,
         active_direction_id=target["selected_direction_id"],
         active_gap_id=target["selected_gap_id"],
+        maturity_level=selection_record.get("selected_maturity_level")
+        or assessment.get("maturity_level", "LEGACY_UNASSESSED"),
+        maturity_limiters=tuple(assessment.get("maturity_limiters", ())),
+        repair_options=tuple(assessment.get("repair_options", ())),
+        open_design_choices=tuple(assessment.get("open_design_choices", ())),
     )
     target.update({
         "selected_idea_id": context.candidate_id,
@@ -2513,7 +2537,10 @@ def render_workflow_status() -> None:
         "Candidate ideas",
         f"{len(ideas)} assessed" if ideas else "0 assessed",
     )
-    columns[3].metric("Primary idea", selected_idea_name())
+    columns[3].metric(
+        "Best exploratory hypothesis" if exploratory else "Primary research hypothesis",
+        selected_idea_name(),
+    )
     columns[4].metric(
         "Selection", "primary hypothesis" if selection_status == "SELECTED"
         else "exploratory only" if exploratory else "not available",
@@ -3233,15 +3260,27 @@ def analyze_gap_page() -> None:
                 "and is not a current literature search."
             )
         render_openalex_status(retrieval)
+        evidence_counts = external.stage_diagnostics
         render_fields({
             "Actual search mode": retrieval.actual_search_mode,
             "Sources": readable_items(retrieval.sources_attempted),
             "Queries": sum(len(items) for items in external.accepted_queries_by_domain.values()),
             "Papers retrieved": retrieval.raw_paper_count,
-            "Papers after deduplication": retrieval.deduplicated_paper_count,
-            "External-problem relevant papers": retrieval.automatically_relevant_paper_count,
-            "Papers with validated operational mechanisms": len(
-                st.session_state.current_research_run.mechanism_bearing_paper_ids
+            "External candidate papers": evidence_counts.get(
+                "external_candidate_paper_count", retrieval.deduplicated_paper_count,
+            ),
+            "External-problem relevant papers": evidence_counts.get(
+                "external_problem_relevant_paper_count", retrieval.automatically_relevant_paper_count,
+            ),
+            "Operational-mechanism evidence papers": evidence_counts.get(
+                "operational_mechanism_evidence_paper_count",
+                len(st.session_state.current_research_run.mechanism_bearing_paper_ids),
+            ),
+            "Mechanism records extracted": evidence_counts.get(
+                "mechanism_record_count", len(external.mechanisms) + len(external.rejected_mechanisms),
+            ),
+            "Mechanisms validated": evidence_counts.get(
+                "validated_mechanism_count", len(external.mechanisms),
             ),
             "Cache used": "Yes" if retrieval.cache_used else "No",
             "Result origin": "session state" if external.reused_from_session else "new direction-scoped run",
@@ -3258,6 +3297,27 @@ def analyze_gap_page() -> None:
             })
     ideas = st.session_state.current_idea_portfolio
     selection = st.session_state.primary_idea_selection_record or {}
+    if ideas and selection:
+        distribution = selection.get("maturity_distribution", {})
+        st.header("Candidate assessment / 候选成熟度评估")
+        columns = st.columns(4)
+        columns[0].metric("Test-ready proposals", distribution.get("TEST_READY_PROPOSAL", 0))
+        columns[1].metric("Research-worthy hypotheses", distribution.get("RESEARCH_WORTHY_HYPOTHESIS", 0))
+        columns[2].metric("Exploratory hypotheses", distribution.get("EXPLORATORY_HYPOTHESIS", 0))
+        columns[3].metric("Rejected candidates", distribution.get("REJECTED", 0))
+        selected_id = selection.get("selected_candidate_id", "")
+        selected_assessment = selection.get("scientific_assessments", selection.get("scientific_gate_results", {})).get(selected_id, {})
+        if selected_assessment:
+            plan = selected_assessment.get("capability_operator_plan", {})
+            render_fields({
+                "Selected result": selected_idea_name(),
+                "Maturity": selection.get("selected_maturity_level") or selected_assessment.get("maturity_level"),
+                "Required capability": plan.get("required_capability", "Not recorded"),
+                "Selected slot bundle": plan.get("selected_slot_bundle", []),
+                "Covered mechanism roles": plan.get("covered_mechanism_roles", []),
+                "Roles supplied by ML engineering": plan.get("ml_engineering_roles", []),
+                "Uncovered roles": plan.get("missing_roles", []),
+            })
     if ideas and selection and selection.get("status") == "NO_COHERENT_IDEA":
         diagnostics = st.session_state.candidate_run_diagnostics or {}
         st.error("No coherent research hypothesis was derived.")
@@ -3617,6 +3677,12 @@ def explain_idea_page() -> None:
     maturity = assessment.get("maturity_level", "RESEARCH_WORTHY_HYPOTHESIS")
     if selection_record.get("status") == "EXPLORATORY_AVAILABLE":
         st.warning("Exploratory hypothesis — not promoted")
+        st.subheader("Why it is still worth investigating")
+        render_bullets(assessment.get("strengths", []))
+        st.subheader("Why it is not research-worthy yet")
+        render_bullets([
+            item.get("issue", "") for item in assessment.get("maturity_limiters", [])
+        ])
     else:
         st.success("Primary research hypothesis")
     st.header("Idea maturity / 想法成熟度")
@@ -3632,6 +3698,19 @@ def explain_idea_page() -> None:
             item.get("repair", "") for item in assessment.get("repairs_applied", [])
         ],
     })
+    plan = assessment.get("capability_operator_plan", {})
+    if plan:
+        st.subheader("Capability/operator plan")
+        render_fields({
+            "Required capability": plan.get("required_capability", "Not recorded"),
+            "Required roles": plan.get("required_roles", []),
+            "Selected slot bundle": plan.get("selected_slot_bundle", []),
+            "Role-to-slot mapping": plan.get("role_to_slot_mapping", {}),
+            "Missing roles": plan.get("missing_roles", []),
+            "Analogy risks": plan.get("analogy_risks", []),
+        })
+    st.subheader("Fastest upgrade-or-reject experiment")
+    render_bullets(assessment.get("repair_options", []))
     open_choices = assessment.get("open_design_choices", [])
     if open_choices:
         with st.expander("Open design choices / 开放设计变量"):
@@ -3919,11 +3998,21 @@ def main() -> None:
     }:
         fallback = PRIMARY_STEPS[1] if st.session_state.selected_direction_id else PRIMARY_STEPS[0]
         st.session_state.pending_primary_step = fallback
-        st.session_state.workflow_guidance = (
-            "No validated primary idea is available. Run Part 2 analysis first."
-            if fallback == PRIMARY_STEPS[1]
-            else "Select a research direction before opening Part 3."
-        )
+        selection = st.session_state.primary_idea_selection_record or {}
+        if fallback == PRIMARY_STEPS[0]:
+            guidance = "Select a research direction before opening Part 3."
+        elif not selection:
+            guidance = "Run Part 2 analysis first."
+        elif selection.get("status") == "EXPLORATORY_AVAILABLE":
+            guidance = (
+                "No research-worthy hypothesis passed yet. Opening the strongest "
+                "exploratory hypothesis after restoring its selected context."
+            )
+        elif selection.get("status") == "NO_COHERENT_IDEA":
+            guidance = "Part 2 completed, but every candidate had a fatal scientific defect."
+        else:
+            guidance = "The selected hypothesis could not be restored from the current session."
+        st.session_state.workflow_guidance = guidance
         st.rerun()
     handlers = [
         discover_directions_page, analyze_gap_page, explain_idea_page,

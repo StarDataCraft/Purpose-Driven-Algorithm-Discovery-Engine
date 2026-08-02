@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
+from hashlib import sha1
 from pathlib import Path
 from typing import Callable
 
@@ -27,6 +29,67 @@ class IdeaPipelineResult:
     derivations: list[IdeaDerivation]
     direction_families: list[object]
     diagnostics: dict[str, object]
+
+
+def _capability_diverse_candidates(
+    candidates: list[AlgorithmCandidate], purpose: PurposeContract,
+    mechanisms: list[object], maximum: int = 6,
+) -> list[AlgorithmCandidate]:
+    """Expand evidence-supported recurrence mechanisms across distinct roles."""
+    purpose_text = f"{purpose.current_failure} {purpose.desired_improvement}".casefold()
+    mechanism_text = " ".join(
+        f"{getattr(item, 'name', '')} {getattr(item, 'original_problem', '')} "
+        f"{getattr(item, 'internal_state', '')} {getattr(item, 'response_rule', '')}"
+        for item in mechanisms
+    ).casefold()
+    if "recurr" not in purpose_text or not any(
+        cue in mechanism_text for cue in ("memory", "retain", "reactivat", "recogn")
+    ):
+        return candidates
+    expanded = list(candidates)
+    archetypes = (
+        (
+            "memory", "Bounded prior-state retention",
+            "Retain a bounded archive of prior specialist state keyed by an observable regime signature.",
+        ),
+        (
+            "model_selection", "Verified prior-specialist selection",
+            "Recognize a recurring regime, select a matching prior specialist, and verify it before reuse.",
+        ),
+        (
+            "routing", "Temporary verified specialist routing",
+            "After recurrence verification, temporarily route or weight predictions toward the prior specialist; fall back on failed verification.",
+        ),
+    )
+    for source in candidates:
+        for slot, label, action in archetypes:
+            if source.affected_component == slot:
+                continue
+            clone = deepcopy(source)
+            clone.candidate_id = "cand:" + sha1(
+                f"{source.candidate_id}:{slot}:{action}".encode()
+            ).hexdigest()[:12]
+            clone.candidate_name = f"{label} for {source.base_algorithm_family}"
+            clone.affected_component = slot
+            clone.update_rule_delta = action if slot == "model_selection" else ""
+            clone.memory_delta = action if slot == "memory" else ""
+            clone.routing_delta = action if slot == "routing" else ""
+            clone.new_state_variables = list(dict.fromkeys([
+                *clone.new_state_variables, "bounded regime signature",
+                "prior specialist verification state",
+            ]))
+            clone.expected_improvement = (
+                "reduce recurring-drift recovery time through verified reuse of retained prior state"
+            )
+            clone.stochastic_trace = {
+                **clone.stochastic_trace,
+                "operator_plan_archetype": slot,
+                "repair_provenance": "required-capability role expansion",
+            }
+            expanded.append(clone)
+            if len(expanded) >= maximum:
+                return expanded
+    return expanded
 
 
 def derive_ideas_for_direction(
@@ -64,6 +127,9 @@ def derive_ideas_for_direction(
         )
     finally:
         memory.close()
+    search.candidates = _capability_diverse_candidates(
+        search.candidates, purpose, external.mechanisms,
+    )
     portfolio = quality_diversity_portfolio(search.candidates, 5)
     accepted_by_mechanism = {
         item.mechanism_id: item for item in external.accepted_alignments

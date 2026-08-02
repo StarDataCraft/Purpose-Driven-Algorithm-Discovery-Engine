@@ -196,9 +196,16 @@ def test_adaptive_external_search_stops_after_sufficient_stage_one_evidence(
         cache_directory=tmp_path,
     )
     assert len(result.papers) >= 8
-    assert len(result.mechanisms) >= 3
-    assert result.stage_diagnostics["adaptive_stage_two_used"] is False
-    assert result.stage_diagnostics["stage_two_query_count"] == 0
+    assert result.mechanisms
+    relevant_ids = {
+        paper.paper_id for paper in result.papers
+        if paper.estimated_relevance_label in {"ESTIMATED_HIGH", "ESTIMATED_MEDIUM"}
+    }
+    assert all(set(item.evidence_paper_ids) & relevant_ids for item in result.mechanisms)
+    # Raw volume is not sufficient when only a small relevant subset carries
+    # validated mechanisms; the bounded second stage should continue.
+    assert result.stage_diagnostics["adaptive_stage_two_used"] is True
+    assert result.stage_diagnostics["stage_two_query_count"] > 0
 
 
 def test_no_mechanism_and_no_alignment_have_stage_specific_errors(

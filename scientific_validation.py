@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
-from enum import IntEnum
 import re
 from typing import Sequence
+
+from idea_maturity import (
+    AssessmentIssue, AssessmentSeverity, CapabilityOperatorPlan,
+    IdeaMaturityLevel, OpenDesignChoice, RepairRecord, ScientificAssessment,
+    issue, maturity_value,
+)
 
 from models import (
     AlgorithmCandidate, AlgorithmModificationSpec, GapSignature, Paper,
@@ -23,39 +27,6 @@ TRANSFER_EVIDENCE = "TRANSFER_EVIDENCE"
 IMPLEMENTATION_EVIDENCE = "IMPLEMENTATION_EVIDENCE"
 EXPERIMENT_EVIDENCE = "EXPERIMENT_EVIDENCE"
 IRRELEVANT = "IRRELEVANT"
-
-
-class IdeaMaturityLevel(IntEnum):
-    REJECTED = 0
-    EXPLORATORY_HYPOTHESIS = 1
-    RESEARCH_WORTHY_HYPOTHESIS = 2
-    TEST_READY_PROPOSAL = 3
-
-
-@dataclass(frozen=True)
-class MaturityLimiter:
-    issue: str
-    why_it_matters: str
-    resolution: str
-    severity: str = "MAJOR_LIMITER"
-
-
-@dataclass(frozen=True)
-class OpenDesignChoice:
-    name: str
-    role: str
-    possible_options: tuple[str, ...]
-    current_default: str
-    information_needed: str
-    resolving_experiment: str
-    effect_if_chosen_incorrectly: str
-
-
-@dataclass(frozen=True)
-class RepairRecord:
-    repair: str
-    provenance: str
-    effect: str
 
 
 def _tokens(value: str) -> set[str]:
@@ -186,47 +157,108 @@ def build_modification_spec(
     )
 
 
-@dataclass(frozen=True)
-class ScientificGateResult:
-    candidate_id: str
-    fatal_failures: tuple[str, ...]
-    maturity_limiters: tuple[MaturityLimiter, ...]
-    strengths: tuple[str, ...]
-    paper_roles: tuple[PaperEvidenceRole, ...]
-    paper_counts: dict[str, int]
-    modification_spec: AlgorithmModificationSpec
-    maturity_level: IdeaMaturityLevel
-    maturity_reason: str
-    repair_options: tuple[str, ...]
-    confidence_by_dimension: dict[str, float]
-    open_design_choices: tuple[OpenDesignChoice, ...] = ()
-    repairs_applied: tuple[RepairRecord, ...] = ()
-
-    @property
-    def passed(self) -> bool:
-        """Compatibility view: coherent enough for research promotion."""
-        return self.maturity_level >= IdeaMaturityLevel.RESEARCH_WORTHY_HYPOTHESIS
-
-    @property
-    def failures(self) -> tuple[str, ...]:
-        """Compatibility view; callers should use fatal_failures/limiters."""
-        return (*self.fatal_failures, *(item.issue for item in self.maturity_limiters))
+ScientificGateResult = ScientificAssessment
 
 
-def _limiter(issue: str, why: str, resolution: str, severity: str = "MAJOR_LIMITER") -> MaturityLimiter:
-    return MaturityLimiter(issue, why, resolution, severity)
+def _limiter(description: str, why: str, resolution: str,
+             severity: str = "MAJOR_LIMITER") -> AssessmentIssue:
+    return issue(
+        re.sub(r"[^a-z0-9]+", "_", description.casefold()).strip("_")[:80],
+        AssessmentSeverity(severity), description,
+        consequence=why, repair_option=resolution,
+    )
 
 
-def _audit_severity(name: str, problems: str) -> str:
+def _audit_severity(name: str, problems: str) -> AssessmentSeverity:
     text = f"{name} {problems}".casefold()
     if any(term in text for term in (
         "wrong task", "task mismatch", "metaphor-only", "unavailable information",
         "required inference", "provenance mismatch",
     )):
-        return "FATAL"
+        return AssessmentSeverity.FATAL
     if any(term in text for term in ("evidence", "novelty", "structural_alignment")):
-        return "MAJOR_LIMITER"
-    return "MINOR_LIMITER"
+        return AssessmentSeverity.MAJOR_LIMITER
+    return AssessmentSeverity.MINOR_LIMITER
+
+
+def build_capability_operator_plan(
+    candidate: AlgorithmCandidate, derivation: IdeaDerivation,
+    purpose: PurposeContract | None = None,
+) -> CapabilityOperatorPlan:
+    """Expand a purpose capability into explicit compatible operator roles."""
+    capability = derivation.required_capability.strip()
+    text = (
+        f"{capability} {derivation.problem_statement} {candidate.gap_summary} "
+        f"{candidate.expected_improvement} {getattr(purpose, 'current_failure', '')}"
+    ).casefold()
+    recurring = any(term in text for term in ("recurr", "prior specialist", "historical"))
+    if recurring:
+        required_roles = (
+            "recognize recurring regime", "retain prior specialist state",
+            "select matching specialist", "verify recurrence match",
+            "route or weight predictions", "fallback after failed verification",
+        )
+        candidates = (
+            "regime_recognition", "bounded_memory", "model_selection",
+            "verification", "routing", "aggregation_weights", "expert_lifecycle",
+        )
+        role_to_slot = {
+            required_roles[0]: "regime_recognition",
+            required_roles[1]: "bounded_memory",
+            required_roles[2]: "model_selection",
+            required_roles[3]: "verification",
+            required_roles[4]: "routing+aggregation_weights",
+            required_roles[5]: "routing_fallback",
+        }
+    else:
+        required_roles = (
+            "detect target condition", "retain required state", "apply algorithm action",
+            "verify response", "fallback safely",
+        )
+        candidates = tuple(dict.fromkeys((
+            candidate.affected_component, derivation.modification_slot,
+            "state_estimation", "verification", "fallback",
+        )))
+        role_to_slot = dict(zip(required_roles, candidates[:len(required_roles)]))
+    mechanism_text = " ".join((
+        derivation.mechanism_name, derivation.original_external_problem,
+        derivation.mechanism_signal, derivation.mechanism_state,
+        derivation.mechanism_trigger, derivation.mechanism_response,
+        candidate_modification(candidate), *derivation.structural_correspondences,
+        *candidate.borrowed_mechanisms, *candidate.new_state_variables,
+    )).casefold()
+    cues = {
+        "recognize recurring regime": ("recurr", "recogn", "regime", "match"),
+        "retain prior specialist state": ("prior", "memory", "retain", "archive", "state"),
+        "select matching specialist": ("select", "specialist", "expert", "model"),
+        "verify recurrence match": ("verify", "confidence", "window", "test"),
+        "route or weight predictions": ("route", "weight", "aggregation", "expert"),
+        "fallback after failed verification": ("fallback", "base", "reject", "fail"),
+    }
+    covered = tuple(role for role in required_roles
+                    if any(cue in mechanism_text for cue in cues.get(role, tuple(role.split()))))
+    engineering = tuple(role for role in required_roles if role not in covered and role in {
+        "verify recurrence match", "fallback after failed verification", "verify response", "fallback safely",
+    })
+    missing = tuple(role for role in required_roles if role not in covered and role not in engineering)
+    selected = tuple(dict.fromkeys(role_to_slot[role] for role in required_roles
+                                   if role in role_to_slot and role not in missing))
+    choices = tuple(OpenDesignChoice(
+        name=role, role="capability/operator role", possible_options=(role_to_slot.get(role, "operator"),),
+        current_default="not fixed", information_needed="Evidence or an ablation identifying the compatible operator.",
+        resolving_experiment="Disable this role and measure whether the claimed causal path survives.",
+        effect_if_chosen_incorrectly="The capability path becomes incomplete.",
+    ) for role in missing)
+    fatal = ()
+    if not selected or not any(slot not in {"update_rule", ""} for slot in selected):
+        fatal = ("required capability collapses to a generic update rule",)
+    return CapabilityOperatorPlan(
+        capability, required_roles, candidate.base_algorithm_family, candidates,
+        selected, role_to_slot, missing,
+        round((len(required_roles) - len(missing)) / max(1, len(required_roles)), 3),
+        fatal, choices, covered, engineering,
+        ("Structural role coverage is inferred and requires discriminating ablation.",),
+    )
 
 
 def _open_choices(spec: AlgorithmModificationSpec) -> tuple[OpenDesignChoice, ...]:
@@ -248,12 +280,13 @@ def validate_candidate_for_promotion(
     *, candidate: AlgorithmCandidate, derivation: IdeaDerivation,
     direction: DirectionSummary, gap: GapSignature, purpose: PurposeContract,
     papers: Sequence[Paper], full_audit: object | None = None,
-) -> ScientificGateResult:
+) -> ScientificAssessment:
     roles = classify_paper_roles(papers, purpose, gap, candidate)
     counts = evidence_count_invariants(roles)
     spec = build_modification_spec(candidate, derivation)
+    capability_plan = build_capability_operator_plan(candidate, derivation, purpose)
     fatal_failures: list[str] = []
-    limiters: list[MaturityLimiter] = []
+    limiters: list[AssessmentIssue] = []
     strengths: list[str] = []
     repairs: list[RepairRecord] = []
     combined = " ".join((candidate.gap_summary, candidate.expected_improvement,
@@ -307,13 +340,13 @@ def validate_candidate_for_promotion(
             problems = "; ".join(getattr(item, "specific_problems", ()) or ())
             severity = _audit_severity(item.name, problems)
             message = f"full audit: {item.name}" + (f" — {problems}" if problems else "")
-            if severity == "FATAL":
+            if severity == AssessmentSeverity.FATAL:
                 fatal_failures.append(message)
             else:
                 limiters.append(_limiter(
                     message, "This audit dimension remains unresolved.",
                     getattr(item, "recommended_action", "Resolve the recorded audit uncertainty."),
-                    severity,
+                    severity.value,
                 ))
     online_drift = "drift" in purpose.current_failure.casefold() and any(
         term in purpose.task.casefold() for term in ("online", "stream")
@@ -329,6 +362,22 @@ def validate_candidate_for_promotion(
             "The family is defensible, but Random Forest is not itself an online drift algorithm.",
             "Compare adaptive random forest and streaming ensemble baselines under matched compute.",
         ))
+    if capability_plan.fatal_conflicts:
+        fatal_failures.extend(
+            f"capability/operator plan: {item}" for item in capability_plan.fatal_conflicts
+        )
+    elif derivation.modification_slot == "update_rule" and len(capability_plan.selected_slot_bundle) > 1:
+        repairs.append(RepairRecord(
+            "Expanded generic update_rule into an explicit capability/operator slot bundle.",
+            "Deterministic required-role to compatible-slot mapping.",
+            ", ".join(capability_plan.selected_slot_bundle),
+        ))
+        if capability_plan.missing_roles:
+            limiters.append(_limiter(
+                "operator plan: some capability roles remain open",
+                "A multi-role capability cannot be represented honestly by one generic update location.",
+                "Implement and ablate the selected recognition, memory, verification, and routing/aggregation roles.",
+            ))
     if spec.unresolved_implementation_choices:
         limiters.append(_limiter(
             "implementation completeness: schematic operator has undefined variables",
@@ -383,7 +432,7 @@ def validate_candidate_for_promotion(
 
     fatal_failures = list(dict.fromkeys(fatal_failures))
     unique_limiters = list({item.issue: item for item in limiters}.values())
-    major = sum(item.severity == "MAJOR_LIMITER" for item in unique_limiters)
+    major = sum(item.severity == AssessmentSeverity.MAJOR_LIMITER for item in unique_limiters)
     experiment_complete = all((candidate.minimal_experiment.hypothesis,
                                candidate.minimal_experiment.success_rule,
                                candidate.minimal_experiment.failure_rule))
@@ -408,13 +457,37 @@ def validate_candidate_for_promotion(
         "implementation": 0.9 if not spec.unresolved_implementation_choices else 0.55,
         "experiment": 0.9 if experiment_complete else 0.4,
     }
-    return ScientificGateResult(
-        candidate.candidate_id, tuple(fatal_failures), tuple(unique_limiters),
-        tuple(strengths), tuple(roles), counts, spec, maturity, reason,
-        tuple(item.resolution for item in unique_limiters), confidence,
-        _open_choices(spec), tuple(repairs),
+    fatal_issues = tuple(issue(
+        re.sub(r"[^a-z0-9]+", "_", description.casefold()).strip("_")[:80],
+        AssessmentSeverity.FATAL, description, evidence=(candidate.candidate_id,),
+        consequence="The hypothesis is scientifically incoherent or infeasible.",
+        repair_option="Repair the fatal contradiction before reassessment.",
+    ) for description in fatal_failures)
+    novelty_level = "CONFIRMED_DUPLICATE" if any("duplicate" in item for item in fatal_failures) else (
+        "INCOMPLETE_SEARCH" if any("prior-art" in item.issue for item in unique_limiters) else "NO_DUPLICATE_FOUND"
+    )
+    return ScientificAssessment(
+        candidate_id=candidate.candidate_id, maturity_level=maturity,
+        issues=(*fatal_issues, *unique_limiters), strengths=tuple(strengths),
+        paper_roles=tuple(roles), paper_counts=counts, modification_spec=spec,
+        capability_slot_assessment=capability_plan,
+        problem_evidence_level="DIRECT" if counts["direct_support_count"] else "CONTEXT_ONLY",
+        mechanism_evidence_level="OPERATIONAL" if not any("mechanism validation" in item for item in fatal_failures) else "NON_OPERATIONAL",
+        alignment_level=("METAPHOR_ONLY" if any("metaphor-only" in item for item in fatal_failures)
+                         else "PLAUSIBLE_STRUCTURAL" if alignment == "PLAUSIBLE_ACCEPTED"
+                         else "STRONG_STRUCTURAL"),
+        prior_art_level=novelty_level,
+        implementation_level="SCHEMATIC" if spec.unresolved_implementation_choices else "CONCRETE_ACTION",
+        information_feasibility_level="IMPOSSIBLE" if any("information availability" in item for item in fatal_failures)
+        else "DELAYED" if any("delayed-feedback" in item.repair for item in repairs) else "AVAILABLE",
+        experiment_level="COMPLETE" if experiment_complete else "INCOMPLETE",
+        maturity_reason=reason,
+        repair_options=tuple(item.repair_option for item in unique_limiters),
+        repairs_applied=tuple(repairs),
+        open_design_choices=tuple((*_open_choices(spec), *capability_plan.open_design_choices)),
+        confidence_by_dimension=confidence,
     )
 
 
-def grouped_gate_failures(results: Sequence[ScientificGateResult]) -> dict[str, int]:
-    return dict(Counter(reason.split(":", 1)[0] for result in results for reason in result.fatal_failures))
+def grouped_gate_failures(results: Sequence[ScientificAssessment]) -> dict[str, int]:
+    return dict(Counter(item.code for result in results for item in result.fatal_failures))

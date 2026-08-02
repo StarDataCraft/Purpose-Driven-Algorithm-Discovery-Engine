@@ -13,6 +13,24 @@ RESOLUTION_STATUSES = {
 }
 
 
+def normalize_primary_selection_record(value: object) -> dict[str, object] | None:
+    """Conservatively migrate old selection records without inventing maturity."""
+    if not isinstance(value, dict):
+        return None
+    record = dict(value)
+    status = str(record.get("status", "FAILED"))
+    record.setdefault("scientific_assessments", record.get("scientific_gate_results", {}))
+    record.setdefault("fatal_rejections", record.get("rejection_reasons", {}))
+    record.setdefault("maturity_limiters", {})
+    record.setdefault("maturity_distribution", {})
+    if status == "SELECTED":
+        record.setdefault("selected_maturity_level", "LEGACY_SELECTED_UNASSESSED")
+    elif status == "NO_CANDIDATE_PASSED":
+        record["status"] = "LEGACY_NO_CANDIDATE_PASSED"
+        record.setdefault("selected_maturity_level", "LEGACY_UNASSESSED")
+    return record
+
+
 @dataclass
 class ExternalResultResolution:
     status: str

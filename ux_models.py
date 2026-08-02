@@ -48,6 +48,10 @@ class SelectedIdeaContext:
     resolution_source: str = "immutable snapshot"
     validation_status: str = "COMPLETE"
     validation_notes: tuple[str, ...] = ()
+    maturity_level: str = "LEGACY_UNASSESSED"
+    maturity_limiters: tuple[dict[str, Any], ...] = ()
+    repair_options: tuple[str, ...] = ()
+    open_design_choices: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,6 +60,9 @@ class SelectedIdeaContext:
     def from_dict(cls, payload: dict[str, Any]) -> "SelectedIdeaContext":
         values = dict(payload)
         values["validation_notes"] = tuple(values.get("validation_notes", ()))
+        values["maturity_limiters"] = tuple(values.get("maturity_limiters", ()))
+        values["repair_options"] = tuple(values.get("repair_options", ()))
+        values["open_design_choices"] = tuple(values.get("open_design_choices", ()))
         return cls(**values)
 
 
@@ -219,6 +226,17 @@ class DirectionPortfolioResult:
     expansion_actions: list[str]
     insufficient_choice_reason: str
     warnings: list[str]
+
+
+def reconcile_direction_limitations(
+    affected_algorithm_family: str, limitations: Sequence[str],
+) -> tuple[str, ...]:
+    """Remove stale limitations whose structured condition has been repaired."""
+    values = list(limitations)
+    if affected_algorithm_family.casefold() not in {"", "unknown", "unspecified", "unbound"}:
+        values = [item for item in values
+                  if "algorithm family is unknown" not in item.casefold()]
+    return tuple(dict.fromkeys(values))
 
 
 @dataclass(frozen=True)
@@ -501,7 +519,10 @@ def build_tiered_direction_portfolio(
         base = build_direction_portfolio(run_id, purpose, [family], list(gaps), list(papers), 1)[0]
         exploratory_reason = ""
         if tier == "EXPLORATORY":
-            exploratory_reason = "; ".join(family.rejection_reasons) or "Evidence did not pass every recommendation gate."
+            reasons = list(reconcile_direction_limitations(
+                base.affected_algorithm_family, family.rejection_reasons,
+            ))
+            exploratory_reason = "; ".join(reasons) or "Evidence did not pass every recommendation gate."
         summaries.append(DirectionSummary(
             **{**asdict(base),
                "portfolio_tier": tier, "portfolio_rank": rank,

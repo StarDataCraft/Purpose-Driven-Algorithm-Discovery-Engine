@@ -20,9 +20,11 @@ RUN_MODEL_SCHEMA_VERSION = "run-models-v1"
 UX_SCHEMA_VERSION = "selected-idea-context-v1"
 FINGERPRINT_FILES = (
     "app.py", "ux_models.py", "direction_generation.py", "scientific_validation.py",
+    "idea_maturity.py",
     "primary_idea_contracts.py",
     "primary_idea_selection.py", "models.py", "gap_consolidation.py",
-    "idea_pipeline.py", "external_discovery_pipeline.py",
+    "idea_pipeline.py", "external_discovery_pipeline.py", "session_schema.py",
+    "pipeline_quality.py",
     "evaluation/schemas.py", "evaluation/audit_models.py",
     "evaluation/result_audit.py", "evaluation/capabilities.py",
 )
@@ -88,6 +90,13 @@ def deployment_consistency(root: Path | None = None) -> dict[str, Any]:
         "primary_idea_selection.py": manifest.get(
             "primary_idea_selection_source_fingerprint", ""
         ),
+        "idea_maturity.py": manifest.get("idea_maturity_source_fingerprint", ""),
+        "idea_pipeline.py": manifest.get("idea_pipeline_source_fingerprint", ""),
+        "external_discovery_pipeline.py": manifest.get(
+            "external_discovery_pipeline_source_fingerprint", ""
+        ),
+        "session_schema.py": manifest.get("session_schema_source_fingerprint", ""),
+        "pipeline_quality.py": manifest.get("pipeline_quality_source_fingerprint", ""),
     }
     mismatches = [
         name for name, fingerprint in expected.items()
