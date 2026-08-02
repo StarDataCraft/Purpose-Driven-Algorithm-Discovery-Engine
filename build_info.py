@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 import platform
@@ -23,6 +24,7 @@ FINGERPRINT_FILES = (
     "evaluation/schemas.py", "evaluation/audit_models.py",
     "evaluation/result_audit.py", "evaluation/capabilities.py",
 )
+DEPLOYMENT_MANIFEST = "deployment_manifest.json"
 
 
 def resolve_commit_sha() -> str:
@@ -54,6 +56,35 @@ def source_fingerprints(root: Path | None = None) -> dict[str, str]:
     return values
 
 
+def load_deployment_manifest(root: Path | None = None) -> dict[str, Any] | None:
+    path = (root or Path(__file__).resolve().parent) / DEPLOYMENT_MANIFEST
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def deployment_consistency(root: Path | None = None) -> dict[str, Any]:
+    """Compare runtime sources with the deterministic release manifest."""
+    manifest = load_deployment_manifest(root)
+    if manifest is None:
+        return {"status": "MANIFEST_UNAVAILABLE", "mismatches": []}
+    current = source_fingerprints(root)
+    expected = {
+        "app.py": manifest.get("app_source_fingerprint", ""),
+        "ux_models.py": manifest.get("ux_models_source_fingerprint", ""),
+    }
+    mismatches = [
+        name for name, fingerprint in expected.items()
+        if not fingerprint or current.get(name) != fingerprint
+    ]
+    return {
+        "status": "SOURCE_MISMATCH" if mismatches else "CONSISTENT",
+        "mismatches": mismatches,
+    }
+
+
 def build_information(engine_mode: str = "lightweight") -> dict[str, Any]:
     return {
         "application_version": APPLICATION_VERSION,
@@ -67,4 +98,5 @@ def build_information(engine_mode: str = "lightweight") -> dict[str, Any]:
         "evaluation_schema_version": EVALUATION_SCHEMA_VERSION,
         "engine_mode": engine_mode,
         "source_fingerprints": source_fingerprints(),
+        "deployment_consistency": deployment_consistency(),
     }

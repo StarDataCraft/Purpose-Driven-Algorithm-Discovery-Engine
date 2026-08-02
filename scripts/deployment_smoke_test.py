@@ -85,6 +85,15 @@ def main() -> None:
         raise RuntimeError(f"Streamlit startup exceptions: {at.exception}")
     assert at.title and at.title[0].value == "Discover directions / 发现方向"
     assert len(at.sidebar.radio(key="_primary_step").options) == 3
+    sidebar_text = " ".join(str(item.value) for item in at.sidebar.caption)
+    assert "Build:" in sidebar_text
+    assert "Pipeline: three-part-ux-v1" in sidebar_text
+    assert "UX schema: selected-idea-context-v1" in sidebar_text
+    assert "Source fingerprint: c1f35d26" in sidebar_text
+    assert "Deployment consistency: CONSISTENT" in sidebar_text
+    page_captions = " ".join(str(item.value) for item in at.caption)
+    assert "Running build:" in page_captions
+    assert "app.py c1f35d26" in page_captions
     at.sidebar.selectbox(key="_research_tool").set_value("Build information")
     at.run(timeout=30)
     assert not at.exception

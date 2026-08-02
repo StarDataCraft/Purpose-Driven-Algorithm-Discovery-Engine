@@ -671,6 +671,17 @@ def sidebar() -> str:
             ],
             key="_research_tool",
         )
+    info = build_information(SETTINGS.gap_engine_mode)
+    app_fingerprint = info["source_fingerprints"].get("app.py", "missing")
+    st.sidebar.divider()
+    st.sidebar.caption(f"Build: {info['commit_sha'][:8]}")
+    st.sidebar.caption(f"Pipeline: {info['pipeline_version']}")
+    st.sidebar.caption(f"UX schema: {info['ux_schema_version']}")
+    st.sidebar.caption(f"Source fingerprint: {app_fingerprint[:8]}")
+    st.sidebar.caption(
+        "Deployment consistency: "
+        + info["deployment_consistency"]["status"]
+    )
     return step
 
 
@@ -3468,6 +3479,11 @@ def main() -> None:
         st.warning(st.session_state.workflow_guidance)
         st.session_state.workflow_guidance = ""
     handlers[PRIMARY_STEPS.index(page)]()
+    info = build_information(SETTINGS.gap_engine_mode)
+    st.caption(
+        f"Running build: {info['commit_sha'][:8]} · "
+        f"app.py {info['source_fingerprints'].get('app.py', 'missing')[:8]}"
+    )
     research_tools_panel()
     if st.session_state.ml_papers:
         with st.sidebar.expander("Trend radar"):
