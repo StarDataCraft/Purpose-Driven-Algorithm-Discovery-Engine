@@ -158,7 +158,8 @@ future adequately sized adjudicated dataset.
 ## Part 2 → Part 3 state-transition acceptance
 
 - Candidate and derivation are validated and committed atomically.
-- Candidate buttons use identity-based keys rather than list indexes.
+- Candidate choice uses one candidate-ID-backed selector and one explicit
+  Continue button; no domain objects cross a button callback boundary.
 - Part 3 renders from versioned immutable snapshots and survives cleared
   candidate and derivation portfolios.
 - Ordinary reruns and backward navigation preserve the selected idea.

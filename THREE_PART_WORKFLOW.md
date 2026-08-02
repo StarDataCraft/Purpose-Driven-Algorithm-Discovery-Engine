@@ -67,11 +67,12 @@ remain separate from inference; novelty and expected improvement remain
 unverified until external evaluation.
 ## Atomic Part 2 → Part 3 selection
 
-Each `Explain this idea` button has the stable key
-`select_idea::<candidate_id>`. Its Streamlit callback validates and commits the
-candidate, derivation, direction, gap, and parent run as one immutable
-`SelectedIdeaContext` before the sidebar widget is instantiated. Streamlit's
-single automatic callback rerun then opens Part 3.
+Part 2 presents one candidate-ID-backed radio selector, a visible selected-idea
+summary, and one `Continue to explanation` button. The normal render branch
+resolves and validates the candidate, derivation, direction, gap, and parent
+run, stores a plain versioned `SelectedIdeaContext` dictionary, verifies the
+stored identities, and performs exactly one rerun into Part 3. Candidate domain
+objects are never passed through a button callback.
 
 Part 3 reconstructs its inputs from the context snapshots first. Mutable Part 2
 portfolios are used only to recover an older ID-only session, and successful
@@ -79,3 +80,6 @@ recovery is immediately upgraded to a context. Back navigation retains the
 portfolio and context. A purpose, run, direction, or gap change invalidates the
 context; selecting another idea in the same portfolio replaces only Part 3
 products.
+
+Manual Part 3 navigation is guided back to the missing prerequisite. When ideas
+exist but none is selected, Part 3 presents the same compact selector inline.

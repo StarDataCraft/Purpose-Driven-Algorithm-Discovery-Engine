@@ -111,21 +111,31 @@ def main() -> None:
     at.button(key="_derive_ideas").click().run(timeout=30)
     assert len(at.session_state["current_idea_portfolio"]) >= 2
     first_id = at.session_state["current_idea_portfolio"][0].candidate_id
-    at.button(key=f"select_idea::{first_id}").click().run(timeout=30)
+    selector = at.radio(key="selected_idea_choice")
+    assert len(selector.options) >= 2
+    at.button(key="_commit_selected_idea").click().run(timeout=30)
     context = at.session_state["selected_idea_context"]
-    assert context and context.candidate_id == first_id
-    assert context.candidate_snapshot["candidate_id"] == first_id
-    assert context.derivation_snapshot["candidate_id"] == first_id
+    assert isinstance(context, dict) and context["candidate_id"] == first_id
+    assert context["candidate_snapshot"]["candidate_id"] == first_id
+    assert context["derivation_snapshot"]["candidate_id"] == first_id
     assert at.session_state["current_result_explanation"].candidate_id == first_id
+    headings = " ".join(item.value for item in at.header)
+    assert at.session_state["current_result_explanation"].title in headings
+    assert "BEFORE → CHANGE → EXPECTED RESULT" in headings
+    rendered = " ".join(str(item.value) for item in at.markdown)
+    assert all(label in rendered for label in ("BEFORE", "CHANGE", "EXPECTED RESULT"))
     assert not any("Select an idea in Part 2." in item.value for item in at.info)
+    assert at.session_state["active_primary_step"] == "3 · Explain the idea / 解释新想法"
     assert not at.exception
 
     part_2 = "2 · Analyze the gap / 分析 Gap"
     at.radio(key="_primary_step").set_value(part_2).run(timeout=30)
     assert at.session_state["current_idea_portfolio"]
     second_id = at.session_state["current_idea_portfolio"][1].candidate_id
-    at.button(key=f"select_idea::{second_id}").click().run(timeout=30)
-    assert at.session_state["selected_idea_context"].candidate_id == second_id
+    selector = at.radio(key="selected_idea_choice")
+    selector.set_value(selector.options[1]).run(timeout=30)
+    at.button(key="_commit_selected_idea").click().run(timeout=30)
+    assert at.session_state["selected_idea_context"]["candidate_id"] == second_id
     assert at.session_state["current_result_explanation"].candidate_id == second_id
     assert first_id != second_id
     assert not at.exception

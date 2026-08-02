@@ -170,8 +170,11 @@ loader so stale or mixed Streamlit builds can be distinguished.
 versioned snapshots and deterministic SHA-256 fingerprints for the candidate
 and derivation, plus direction, gap, run, selection timestamp, and validation
 provenance. Selection construction validates identity locally before any state
-write; the commit then publishes all selection keys and clears only explanation,
-diagram, and optional-audit outputs.
+write; the commit then publishes plain serializable selection values, reads the
+context back for identity verification, and clears only explanation, diagram,
+and optional-audit outputs. Navigation is a separate pending-step handoff so the
+normal button branch can request one rerun without mutating an instantiated
+sidebar widget.
 
 Part 3 resolves immutable snapshots before any session portfolio lookup. Legacy
 ID-only sessions can recover from both portfolios and are upgraded immediately.

@@ -129,7 +129,7 @@ assert app.session_state["selected_direction_id"]
 app.button(key="_derive_ideas").click().run(timeout=30)
 assert app.session_state["current_idea_portfolio"]
 candidate_id = app.session_state["current_idea_portfolio"][0].candidate_id
-app.button(key=f"select_idea::{candidate_id}").click().run(timeout=30)
+app.button(key="_commit_selected_idea").click().run(timeout=30)
 assert app.session_state["current_result_explanation"] is not None
 assert app.session_state["current_result_audit"] is None
 assert app.session_state["current_audit_build_result"].status == "UNAVAILABLE"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from dataclasses import replace
+import importlib
 
 from streamlit.testing.v1 import AppTest
 
@@ -35,9 +36,35 @@ def run_to_part_3(app: AppTest) -> AppTest:
     run_offline_part_1(app)
     app.button(key="_select_direction_0").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
-    candidate_id = app.session_state["current_idea_portfolio"][0].candidate_id
-    app.button(key=f"select_idea::{candidate_id}").click().run(timeout=30)
+    app.button(key="_commit_selected_idea").click().run(timeout=30)
     return app
+
+
+def selection_trace(app: AppTest, label: str) -> dict[str, object]:
+    context = app.session_state["selected_idea_context"]
+    explanation = app.session_state["current_result_explanation"]
+    try:
+        choice = app.session_state["selected_idea_choice"]
+    except KeyError:
+        choice = ""
+    return {
+        "label": label,
+        "selected_idea_choice": choice,
+        "selected_idea_id": app.session_state["selected_idea_id"],
+        "selected_idea_context": context,
+        "candidate_portfolio_ids": [
+            item.candidate_id for item in app.session_state["candidate_portfolio"]
+        ],
+        "derivation_candidate_ids": [
+            item.candidate_id for item in app.session_state["current_idea_portfolio"]
+        ],
+        "selected_direction_id": app.session_state["selected_direction_id"],
+        "selected_gap_id": app.session_state["selected_gap_id"],
+        "selection_error": app.session_state["selected_idea_selection_error"],
+        "active_step": app.session_state["active_primary_step"],
+        "resolved_candidate_id": getattr(explanation, "candidate_id", ""),
+        "rendered_candidate_name": getattr(explanation, "title", ""),
+    }
 
 
 def test_primary_navigation_has_exactly_three_steps_and_tools():
@@ -145,25 +172,34 @@ def test_part_3_result_diagrams_experiment_and_secondary_json():
     assert not app.exception
 
 
-def test_actual_first_and_second_idea_buttons_commit_exact_snapshots():
+def test_actual_first_and_second_idea_choices_commit_exact_snapshots():
     for index in (0, 1):
         app = run_offline_part_1(app_start())
         app.button(key="_select_direction_0").click().run(timeout=30)
         app.button(key="_derive_ideas").click().run(timeout=30)
         derivation = app.session_state["current_idea_portfolio"][index]
         expected = derivation.candidate_id
-        app.button(key=f"select_idea::{expected}").click().run(timeout=30)
+        trace = [selection_trace(app, "before selection")]
+        selector = app.radio(key="selected_idea_choice")
+        if index:
+            selector.set_value(selector.options[index]).run(timeout=30)
+        trace.append(selection_trace(app, "after widget change"))
+        assert app.session_state["selected_idea_choice"] == expected
+        assert app.session_state["selected_idea_id"] == ""
+        app.button(key="_commit_selected_idea").click().run(timeout=30)
+        trace.append(selection_trace(app, "after Continue and Part 3 rerender"))
 
         context = app.session_state["selected_idea_context"]
+        assert isinstance(context, dict)
         assert app.session_state["selected_idea_id"] == expected
-        assert context.candidate_id == expected
-        assert context.derivation_id == derivation.derivation_id
-        assert context.candidate_snapshot["candidate_id"] == expected
-        assert context.derivation_snapshot["candidate_id"] == expected
-        assert app.session_state["current_result_explanation"].candidate_id == expected
+        assert context["candidate_id"] == expected
+        assert context["derivation_id"] == derivation.derivation_id
+        assert context["candidate_snapshot"]["candidate_id"] == expected
+        assert context["derivation_snapshot"]["candidate_id"] == expected
+        assert app.session_state["current_result_explanation"].candidate_id == expected, trace
         assert app.session_state["_primary_step"] == PART_3
         assert not any("Select an idea in Part 2." in x.value for x in app.info)
-        assert not app.exception
+        assert not app.exception, trace
 
 
 def test_selected_snapshots_survive_both_portfolios_being_cleared_and_rerun():
@@ -179,6 +215,77 @@ def test_selected_snapshots_survive_both_portfolios_being_cleared_and_rerun():
     assert app.session_state["current_result_explanation"].candidate_id == expected
     assert len(app.session_state["current_diagram_specs"]) >= 3
     assert not any("Select an idea in Part 2." in x.value for x in app.info)
+    assert not app.exception
+
+
+def test_manual_part_3_navigation_is_guided_or_offers_inline_selection():
+    app = app_start()
+    app.radio(key="_primary_step").set_value(PART_3).run(timeout=30)
+    assert app.session_state["_primary_step"] == PART_1
+    assert any("Select a research direction" in item.value for item in app.warning)
+
+    app = run_offline_part_1(app_start())
+    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.radio(key="_primary_step").set_value(PART_3).run(timeout=30)
+    assert app.session_state["_primary_step"] == PART_2
+    assert any("Choose a candidate idea" in item.value for item in app.warning)
+
+    app.button(key="_derive_ideas").click().run(timeout=30)
+    expected = app.session_state["current_idea_portfolio"][0].candidate_id
+    app.radio(key="_primary_step").set_value(PART_3).run(timeout=30)
+    assert app.button(key="_commit_selected_idea").label == "Use this idea / 使用这个想法"
+    assert any("none is selected" in item.value for item in app.warning)
+    app.button(key="_commit_selected_idea").click().run(timeout=30)
+    assert app.session_state["current_result_explanation"].candidate_id == expected
+    assert not app.exception
+
+
+def test_hot_reload_dictionary_reconstruction_and_back_navigation_preserve_choice():
+    app = run_to_part_3(app_start())
+    payload = app.session_state["selected_idea_context"]
+    assert isinstance(payload, dict)
+    import ux_models
+    reloaded = importlib.reload(ux_models)
+    restored = reloaded.SelectedIdeaContext.from_dict(payload)
+    assert restored.candidate_id == app.session_state["selected_idea_id"]
+
+    app.radio(key="_primary_step").set_value(PART_2).run(timeout=30)
+    assert app.session_state["selected_idea_choice"] == restored.candidate_id
+    assert any("Idea selected successfully" in item.value for item in app.success)
+    app.radio(key="_primary_step").set_value(PART_3).run(timeout=30)
+    assert app.session_state["current_result_explanation"].candidate_id == restored.candidate_id
+    assert not app.exception
+
+
+def test_three_candidate_selector_uses_stable_ids_and_third_choice():
+    app = run_offline_part_1(app_start())
+    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key="_derive_ideas").click().run(timeout=30)
+    candidate = replace(
+        app.session_state["candidate_portfolio"][1],
+        candidate_id="cand:deterministic-third",
+        candidate_name="Hierarchical Regime Memory",
+    )
+    derivation = replace(
+        app.session_state["current_idea_portfolio"][1],
+        candidate_id=candidate.candidate_id,
+        derivation_id="derivation:deterministic-third",
+    )
+    app.session_state["candidate_portfolio"] = [
+        *app.session_state["candidate_portfolio"], candidate,
+    ]
+    app.session_state["current_idea_portfolio"] = [
+        *app.session_state["current_idea_portfolio"], derivation,
+    ]
+    app.run(timeout=30)
+    selector = app.radio(key="selected_idea_choice")
+    assert len(selector.options) == 3
+    assert len(set(item.candidate_id for item in app.session_state["candidate_portfolio"])) == 3
+    assert "Ambitious — Hierarchical Regime Memory" in selector.options
+    selector.set_value(selector.options[2]).run(timeout=30)
+    app.button(key="_commit_selected_idea").click().run(timeout=30)
+    assert app.session_state["selected_idea_id"] == candidate.candidate_id
+    assert app.session_state["current_result_explanation"].title == candidate.candidate_name
     assert not app.exception
 
 
@@ -210,6 +317,23 @@ def test_candidate_derivation_mismatch_is_rejected_before_navigation():
     else:
         raise AssertionError("mismatched selection unexpectedly committed")
     assert state == before
+
+
+def test_actual_continue_failure_stays_in_part_2_and_is_visible():
+    app = run_offline_part_1(app_start())
+    app.button(key="_select_direction_0").click().run(timeout=30)
+    app.button(key="_derive_ideas").click().run(timeout=30)
+    chosen = app.session_state["candidate_portfolio"][0]
+    chosen.research_run_id = "run:wrong"
+    app.run(timeout=30)
+    app.button(key="_commit_selected_idea").click().run(timeout=30)
+
+    assert app.session_state["_primary_step"] == PART_2
+    assert app.session_state["selected_idea_context"] is None
+    assert "another research run" in app.session_state["selected_idea_selection_error"]
+    assert any("Could not select this idea" in item.value for item in app.error)
+    assert any("selection error" in item.label for item in app.expander)
+    assert not app.exception
 
 
 def test_selection_snapshot_round_trips_and_fingerprints_are_deterministic():
@@ -259,7 +383,8 @@ def test_empty_parts_are_actionable_not_blank():
     app.radio(key="_primary_step").set_value(PART_2).run()
     assert any("Select a research direction" in item.value for item in app.info)
     app.radio(key="_primary_step").set_value(PART_3).run()
-    assert any("Select an idea" in item.value for item in app.info)
+    assert app.session_state["_primary_step"] == PART_1
+    assert any("Select a research direction" in item.value for item in app.warning)
 
 
 def test_same_direction_reuses_and_different_direction_rebuilds_external_state():
@@ -297,8 +422,7 @@ def test_two_distinct_directions_complete_all_three_parts():
     app.radio(key="_primary_step").set_value(PART_1).run()
     app.button(key="_select_direction_1").click().run(timeout=30)
     app.button(key="_derive_ideas").click().run(timeout=30)
-    candidate_id = app.session_state["current_idea_portfolio"][0].candidate_id
-    app.button(key=f"select_idea::{candidate_id}").click().run(timeout=30)
+    app.button(key="_commit_selected_idea").click().run(timeout=30)
 
     second_explanation = app.session_state["current_result_explanation"]
     assert second_explanation.direction_id != first_direction

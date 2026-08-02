@@ -242,6 +242,9 @@ def initialize_state() -> None:
         "selected_idea_context": None,
         "selected_idea_selection_error": "",
         "selected_idea_selection_version": SELECTED_IDEA_SCHEMA_VERSION,
+        "selected_idea_selection_error_details": {},
+        "pending_primary_step": "",
+        "workflow_guidance": "",
         "current_result_explanation": None,
         "current_result_audit": None,
         "current_audit_build_result": None,
@@ -363,6 +366,8 @@ def invalidate_downstream_for_purpose() -> None:
         "selected_idea_context": None,
         "selected_idea_selection_error": "",
         "selected_idea_selection_version": SELECTED_IDEA_SCHEMA_VERSION,
+        "selected_idea_selection_error_details": {},
+        "selected_idea_choice": "",
         "current_result_explanation": None, "current_diagram_specs": [],
         "current_result_audit": None,
         "current_audit_build_result": None,
@@ -386,6 +391,8 @@ def invalidate_downstream_for_gap() -> None:
     st.session_state.selected_derivation_snapshot = None
     st.session_state.selected_idea_context = None
     st.session_state.selected_idea_selection_error = ""
+    st.session_state.selected_idea_selection_error_details = {}
+    st.session_state.selected_idea_choice = ""
     st.session_state.current_result_explanation = None
     st.session_state.current_result_audit = None
     st.session_state.current_audit_build_result = None
@@ -2118,16 +2125,23 @@ def commit_idea_selection(
         "selected_idea_id": context.candidate_id,
         "selected_candidate_snapshot": context.candidate_snapshot,
         "selected_derivation_snapshot": context.derivation_snapshot,
-        "selected_idea_context": context,
+        "selected_idea_context": context.to_dict(),
         "selected_idea_selection_error": "",
         "selected_idea_selection_version": context.schema_version,
         "current_result_explanation": None,
         "current_result_audit": None,
         "current_audit_build_result": None,
         "current_diagram_specs": [],
-        "_primary_step": PRIMARY_STEPS[2],
-        "active_primary_step": PRIMARY_STEPS[2],
     })
+    stored = SelectedIdeaContext.from_dict(target["selected_idea_context"])
+    if not (
+        stored.candidate_id == candidate.candidate_id
+        and stored.derivation_id == derivation.derivation_id
+        and stored.direction_id == direction.direction_id
+        and stored.gap_id == gap.gap_id
+        and target["selected_idea_id"] == candidate.candidate_id
+    ):
+        raise RuntimeError("selected idea state verification failed")
     try:
         if state is not None:
             return context
@@ -2144,19 +2158,41 @@ def commit_idea_selection(
     return context
 
 
-def handle_idea_selection(**selection: object) -> None:
-    """Streamlit callback: commit before sidebar widgets are instantiated."""
-    try:
-        commit_idea_selection(**selection)
-    except (KeyError, TypeError, ValueError) as exc:
-        st.session_state.selected_idea_selection_error = str(exc)
+def commit_selected_idea_by_id(
+    candidate_id: str, state: object | None = None,
+) -> SelectedIdeaContext:
+    """Resolve, atomically commit, and verify one selected candidate ID."""
+    target = st.session_state if state is None else state
+    candidates = {
+        item.candidate_id: item for item in target["candidate_portfolio"]
+    }
+    derivations = {
+        item.candidate_id: item for item in target["current_idea_portfolio"]
+    }
+    if candidate_id not in candidates:
+        raise ValueError(f"candidate {candidate_id!r} is not in the current portfolio")
+    if candidate_id not in derivations:
+        raise ValueError(f"candidate {candidate_id!r} has no matching derivation")
+    return commit_idea_selection(
+        candidate=candidates[candidate_id], derivation=derivations[candidate_id],
+        direction=target["selected_direction_snapshot"],
+        gap=target["selected_gap"], run=target["current_research_run"],
+        state=target,
+    )
 
 
 def validate_selected_idea_state() -> str:
     """Classify selection integrity before Part 3 resolves its snapshots."""
+    if st.session_state.selected_idea_selection_error:
+        return "SELECTION_COMMIT_FAILED"
     raw = st.session_state.selected_idea_context
     if raw is None:
-        return "RECOVERABLE" if st.session_state.selected_idea_id else "NOT_SELECTED"
+        if st.session_state.selected_idea_id:
+            return "RECOVERABLE_ID_ONLY"
+        if (st.session_state.candidate_portfolio
+                and st.session_state.current_idea_portfolio):
+            return "NOT_SELECTED_PORTFOLIO_AVAILABLE"
+        return "NOT_SELECTED_NO_PORTFOLIO"
     try:
         context = (
             SelectedIdeaContext.from_dict(raw) if isinstance(raw, dict) else raw
@@ -2206,10 +2242,161 @@ def resolve_selected_idea() -> tuple[object, object, object, object, SelectedIde
     st.session_state.update({
         "selected_candidate_snapshot": context.candidate_snapshot,
         "selected_derivation_snapshot": context.derivation_snapshot,
-        "selected_idea_context": context,
+        "selected_idea_context": context.to_dict(),
         "selected_idea_selection_version": context.schema_version,
     })
     return candidate, derivation, st.session_state.selected_direction_snapshot, st.session_state.selected_gap, context
+
+
+def selected_idea_name() -> str:
+    candidate_id = st.session_state.selected_idea_id
+    if not candidate_id:
+        return "none"
+    raw = st.session_state.selected_candidate_snapshot or {}
+    return str(raw.get("candidate_name", candidate_id))
+
+
+def selected_idea_invariant_violations() -> list[str]:
+    """Return strict cross-portfolio and selected-context consistency failures."""
+    violations = []
+    candidate_ids = {
+        item.candidate_id for item in st.session_state.candidate_portfolio
+    }
+    derivation_ids = {
+        item.candidate_id for item in st.session_state.current_idea_portfolio
+    }
+    missing = derivation_ids - candidate_ids
+    if missing:
+        violations.append(
+            "Derivations lack candidates: " + ", ".join(sorted(missing))
+        )
+    selected = st.session_state.selected_idea_id
+    if selected and st.session_state.selected_idea_context is None:
+        if selected not in candidate_ids or selected not in derivation_ids:
+            violations.append("Selected idea has neither context nor recoverable portfolios.")
+    if validate_selected_idea_state() in {"COMPLETE", "LEGACY_CONTEXT"}:
+        resolved = resolve_selected_idea()
+        if resolved and resolved[0].candidate_id != selected:
+            violations.append("Rendered candidate would differ from selected_idea_id.")
+    return violations
+
+
+def render_workflow_status() -> None:
+    """Show state facts separately from the page the user is viewing."""
+    ideas = st.session_state.current_idea_portfolio
+    ready = validate_selected_idea_state() in {"COMPLETE", "LEGACY_CONTEXT"}
+    st.subheader("Workflow status / 流程状态")
+    columns = st.columns(5)
+    columns[0].metric("Research direction", "selected" if st.session_state.selected_direction_id else "not selected")
+    columns[1].metric("External evidence", "ready" if st.session_state.current_external_result else "not ready")
+    columns[2].metric("Candidate ideas", f"{len(ideas)} generated")
+    columns[3].metric("Selected idea", selected_idea_name())
+    columns[4].metric("Part 3", "ready" if ready else "locked")
+    violations = selected_idea_invariant_violations()
+    if violations:
+        st.error("Selected-idea state invariant failed.")
+        with st.expander("Technical details · state invariants"):
+            render_bullets(violations)
+
+
+def selection_error_details(candidate_id: str, exc: BaseException) -> dict[str, str]:
+    derivation = next((item for item in st.session_state.current_idea_portfolio
+                       if item.candidate_id == candidate_id), None)
+    return {
+        "Exception type": type(exc).__name__,
+        "Message": " ".join(str(exc).split())[:500],
+        "Candidate ID": candidate_id,
+        "Derivation ID": getattr(derivation, "derivation_id", "not found"),
+        "Run ID": getattr(st.session_state.current_research_run, "run_id", "not set"),
+        "Direction ID": st.session_state.selected_direction_id or "not set",
+        "Gap ID": st.session_state.selected_gap_id or "not set",
+    }
+
+
+def render_candidate_selector(*, inline: bool = False) -> None:
+    """Render one explicit choice and one normal-branch commit action."""
+    candidates = {
+        item.candidate_id: item for item in st.session_state.candidate_portfolio
+    }
+    derivations = {
+        item.candidate_id: item for item in st.session_state.current_idea_portfolio
+    }
+    candidate_ids = [
+        item.candidate_id for item in st.session_state.current_idea_portfolio
+        if item.candidate_id in candidates
+    ]
+    if not candidate_ids:
+        return
+    categories = ["Conservative", "Balanced", "Ambitious"]
+    labels = {
+        candidate_id: f"{categories[min(index, 2)]} — {candidates[candidate_id].candidate_name}"
+        for index, candidate_id in enumerate(candidate_ids)
+    }
+    current_choice = st.session_state.get("selected_idea_choice")
+    formatted_choice = next(
+        (candidate_id for candidate_id, label in labels.items()
+         if current_choice == label), None,
+    )
+    if formatted_choice:
+        st.session_state.selected_idea_choice = formatted_choice
+    elif current_choice not in candidate_ids:
+        st.session_state.selected_idea_choice = (
+            st.session_state.selected_idea_id
+            if st.session_state.selected_idea_id in candidate_ids
+            else candidate_ids[0]
+        )
+    st.header("Candidate idea portfolio / 候选想法")
+    if inline:
+        st.warning("Your candidate ideas are available, but none is selected.")
+    else:
+        st.success(f"Candidate ideas are ready — {len(candidate_ids)} ideas were generated.")
+    choice = st.radio(
+        "Choose one idea to explain", candidate_ids,
+        format_func=lambda candidate_id: labels.get(candidate_id, candidate_id),
+        key="selected_idea_choice",
+    )
+    choice = next(
+        (candidate_id for candidate_id, label in labels.items()
+         if choice in {candidate_id, label}), choice,
+    )
+    candidate = candidates[choice]
+    derivation = derivations[choice]
+    st.subheader("Selected idea / 已选想法")
+    render_fields({
+        "Candidate title": candidate.candidate_name,
+        "Starting algorithm": candidate.base_algorithm,
+        "Exact modification slot": derivation.modification_slot,
+        "Borrowed mechanism": derivation.mechanism_name,
+        "Expected benefit": candidate.expected_improvement,
+        "Main risk": candidate.expected_failure_modes[0]
+        if candidate.expected_failure_modes else "unknown",
+    })
+    label = "Use this idea / 使用这个想法" if inline else "Continue to explanation / 进入想法解释"
+    if st.button(label, key="_commit_selected_idea", type="primary"):
+        try:
+            context = commit_selected_idea_by_id(choice)
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            st.session_state.selected_idea_selection_error = str(exc)
+            st.session_state.selected_idea_selection_error_details = selection_error_details(choice, exc)
+        else:
+            st.session_state.pending_primary_step = PRIMARY_STEPS[2]
+            st.session_state.workflow_guidance = ""
+            st.session_state.selected_idea_selection_error_details = {}
+            st.rerun()
+    if st.session_state.selected_idea_selection_error:
+        st.error(f"Could not select this idea. Reason: {st.session_state.selected_idea_selection_error}")
+        with st.expander("Technical details · selection error"):
+            st.write(st.session_state.selected_idea_selection_error_details)
+    elif st.session_state.selected_idea_id in candidate_ids:
+        raw = st.session_state.selected_idea_context
+        context = SelectedIdeaContext.from_dict(raw) if isinstance(raw, dict) else raw
+        st.success(f"Idea selected successfully — {selected_idea_name()}")
+        render_fields({
+            "Candidate ID": context.candidate_id,
+            "Direction": context.direction_id,
+            "Gap": context.gap_id,
+            "Selected timestamp": context.selected_at_utc,
+        })
 
 
 def set_external_live_retry() -> None:
@@ -2532,6 +2719,7 @@ def render_fields(values: dict[str, object]) -> None:
 
 def analyze_gap_page() -> None:
     st.title("Analyze the gap / 分析 Gap")
+    render_workflow_status()
     direction = st.session_state.selected_direction_snapshot
     if not direction:
         st.info("Select a research direction in Part 1.")
@@ -2612,6 +2800,8 @@ def analyze_gap_page() -> None:
             st.session_state.ux_performance[
                 "part_2_analysis_seconds"
             ] = round(time.perf_counter() - part_started, 4)
+    if st.session_state.current_idea_portfolio:
+        render_candidate_selector()
     external = st.session_state.current_external_result
     if external:
         st.header("Normalized problem / 规范化问题")
@@ -2738,14 +2928,7 @@ def analyze_gap_page() -> None:
             "Conflicts": readable_items(alignment.conflicts),
             "Analogy boundary": "Structural correspondence only; literal equivalence is not assumed.",
         })
-    st.header("Candidate idea portfolio / 候选想法")
-    if st.session_state.selected_idea_selection_error:
-        st.error(
-            "The selected candidate no longer matches its derivation. "
-            "Return to Part 2 and select the idea again."
-        )
-        with st.expander("Technical details · selection error"):
-            st.write(st.session_state.selected_idea_selection_error)
+    st.header("Candidate idea details / 候选想法详情")
     candidates = {
         item.candidate_id: item for item in st.session_state.candidate_portfolio
     }
@@ -2769,16 +2952,6 @@ def analyze_gap_page() -> None:
                 "Novelty": derivation.novelty_status,
                 "Feasibility": candidate.confidence,
             })
-            st.button(
-                "Explain this idea / 解释这个想法",
-                key=f"select_idea::{candidate.candidate_id}", type="primary",
-                on_click=handle_idea_selection,
-                kwargs={
-                    "candidate": candidate, "derivation": derivation,
-                    "direction": direction, "gap": gap,
-                    "run": st.session_state.current_research_run,
-                },
-            )
 
 
 def render_diagram(spec: dict[str, object]) -> None:
@@ -2959,17 +3132,24 @@ def render_result_audit(
 
 def explain_idea_page() -> None:
     st.title("Explain the idea / 解释新想法")
+    render_workflow_status()
     status = validate_selected_idea_state()
     try:
         resolved = resolve_selected_idea() if status in {
-            "COMPLETE", "LEGACY_CONTEXT", "RECOVERABLE",
+            "COMPLETE", "LEGACY_CONTEXT", "RECOVERABLE_ID_ONLY",
         } else None
     except (KeyError, TypeError, ValueError):
         status = "SNAPSHOT_INVALID"
         resolved = None
     if not resolved:
-        if status == "NOT_SELECTED":
-            st.info("Select an idea in Part 2.")
+        if (st.session_state.candidate_portfolio
+                and st.session_state.current_idea_portfolio):
+            render_candidate_selector(inline=True)
+            return
+        if status == "NOT_SELECTED_NO_PORTFOLIO":
+            st.info("No ideas have been generated. Return to Part 2 and derive ideas.")
+        elif status == "SELECTION_COMMIT_FAILED":
+            st.error(f"Could not select this idea. Reason: {st.session_state.selected_idea_selection_error}")
         elif status == "CANDIDATE_DERIVATION_MISMATCH":
             st.error(
                 "The selected candidate no longer matches its derivation. "
@@ -3262,10 +3442,31 @@ def research_tools_panel() -> None:
 def main() -> None:
     st.set_page_config(page_title="Purpose-Driven Algorithm Discovery", layout="wide")
     initialize_state()
+    pending = st.session_state.pending_primary_step
+    if pending:
+        st.session_state["_primary_step"] = pending
+        st.session_state.active_primary_step = pending
+        st.session_state.pending_primary_step = ""
     page = sidebar()
+    if page == PRIMARY_STEPS[2] and validate_selected_idea_state() not in {
+        "COMPLETE", "LEGACY_CONTEXT", "RECOVERABLE_ID_ONLY",
+        "NOT_SELECTED_PORTFOLIO_AVAILABLE", "SELECTION_COMMIT_FAILED",
+        "SNAPSHOT_INVALID",
+    }:
+        fallback = PRIMARY_STEPS[1] if st.session_state.selected_direction_id else PRIMARY_STEPS[0]
+        st.session_state.pending_primary_step = fallback
+        st.session_state.workflow_guidance = (
+            "Choose a candidate idea below before opening Part 3."
+            if fallback == PRIMARY_STEPS[1]
+            else "Select a research direction before opening Part 3."
+        )
+        st.rerun()
     handlers = [
         discover_directions_page, analyze_gap_page, explain_idea_page,
     ]
+    if st.session_state.workflow_guidance:
+        st.warning(st.session_state.workflow_guidance)
+        st.session_state.workflow_guidance = ""
     handlers[PRIMARY_STEPS.index(page)]()
     research_tools_panel()
     if st.session_state.ml_papers:

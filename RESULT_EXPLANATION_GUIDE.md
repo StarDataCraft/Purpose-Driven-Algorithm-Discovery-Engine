@@ -30,3 +30,5 @@ do not change the idea being explained. Technical details show the exact IDs,
 selection timestamp, schema and pipeline versions, fingerprints, resolution
 source, and validation status. A legacy ID-only session is recovered from its
 portfolio only once and then converted to the canonical snapshot format.
+If the user opens Part 3 before committing a choice while portfolios remain
+available, the page presents a compact inline selector rather than a dead end.
