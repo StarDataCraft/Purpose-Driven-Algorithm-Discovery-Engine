@@ -9,7 +9,7 @@ import re
 from algorithm_library import load_algorithm_library
 from assumption_analysis import (
     detect_assumption_mismatches, extract_observed_conditions,
-    load_assumption_registry, mismatch_to_signature,
+    load_assumption_registry, mismatch_to_signature, purpose_condition_types,
 )
 from contradiction_analysis import contradiction_to_signature, detect_contradictory_evidence
 from coverage_analysis import (
@@ -208,6 +208,7 @@ def mine_gaps(papers: list[Paper], purpose: PurposeContract | None = None) -> li
         )
     ]
     conditions = extract_observed_conditions(papers, purpose)
+    active_conditions = purpose_condition_types(purpose)
     used = {
         record.algorithm for record in records if record.algorithm != "UNKNOWN"
     } | {
@@ -216,7 +217,10 @@ def mine_gaps(papers: list[Paper], purpose: PurposeContract | None = None) -> li
     mismatches = [
         mismatch_to_signature(item, purpose)
         for item in detect_assumption_mismatches(
-            load_assumption_registry(), conditions, used, purpose
+            load_assumption_registry(), [
+                condition for condition in conditions
+                if condition.condition_type in active_conditions
+            ], used, purpose
         )
     ]
     contradictions = [

@@ -67,6 +67,12 @@ class DomainSelection:
     reasons: list[str]
     missing_correspondence: list[str]
     selected: bool
+    unmatched_required_roles: list[str] = field(default_factory=list)
+    problem_topology_compatibility: float = 0.0
+    likely_mechanism_value: float = 0.0
+    query_specificity: float = 0.0
+    analogy_risk: float = 1.0
+    rejection_reason: str = ""
 
 
 RECURRENCE_SYNONYMS = [
@@ -394,23 +400,39 @@ def select_external_domains(
     recurring = "recurr" in (
         signature.system_condition + signature.disturbance_pattern
     ).casefold()
-    preferred = {
-        "immunology", "ecology", "control_theory", "neuroscience",
-        "dynamical_systems",
-    } if recurring else {"control_theory", "complex_systems", "biology"}
+    required_roles = (
+        {"memory", "recognition", "switching", "recovery"}
+        if recurring else {"feedback", "stability", "adaptation"}
+    )
     selections = []
     for domain, profile in DOMAIN_PROFILES.items():
-        score = .35 + (.5 if domain in preferred else 0)
-        reasons = ["maps recurring disturbance to native terminology"] if recurring else [
-            "maps adaptation and stability roles"
-        ]
+        roles = set(profile["roles"])
+        matched = sorted(required_roles & roles)
+        unmatched = sorted(required_roles - roles)
+        topology = len(matched) / len(required_roles)
+        mechanism_value = min(1.0, .35 + .18 * len(roles))
+        queries = profile.get("queries", [])
+        query_specificity = min(1.0, sum(len(query.split()) >= 4 for query in queries) / max(1, len(queries)))
+        analogy_risk = max(0.0, 1.0 - topology * .65 - mechanism_value * .2)
+        directional_bonus = (
+            {"control_theory": .18, "immunology": .10,
+             "dynamical_systems": .04}.get(domain, 0.0)
+            if recurring else 0.0
+        )
+        score = round(min(1.0, .45 * topology + .30 * mechanism_value
+                          + .25 * query_specificity + directional_bonus), 3)
+        reasons = [
+            f"Matches structural roles: {', '.join(matched)}.",
+            f"Provides {len(roles)} domain-native mechanism role(s) with query specificity {query_specificity:.2f}.",
+        ] if matched else ["No required problem-topology role matched."]
         selections.append(DomainSelection(
-            domain, list(profile["roles"]), round(score, 2), reasons,
-            [] if domain in preferred else ["weaker direct recurrence correspondence"],
-            False,
+            domain, matched, score, reasons, unmatched, False,
+            unmatched, round(topology, 3), round(mechanism_value, 3),
+            round(query_specificity, 3), round(analogy_risk, 3),
+            "" if matched else "No required structural role matched.",
         ))
-    selections.sort(key=lambda item: item.relevance_score, reverse=True)
-    for item in selections[:maximum]:
+    selections.sort(key=lambda item: (-item.relevance_score, item.domain))
+    for item in selections[:min(3, maximum)]:
         item.selected = True
     return selections
 

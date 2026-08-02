@@ -34,9 +34,15 @@ dependencies are not required for this check.
    evidence-backed candidate direction.
 2. **Analyze the gap / 分析 Gap** — inspect coverage and automatically retrieve
    direction-specific external evidence, extract mechanisms, test structural
-   correspondence, and derive candidate ideas.
+   correspondence, derive internal candidates, and automatically commit the
+   highest-ranked candidate that passes every scientific hard gate.
 3. **Explain the idea / 解释新想法** — read the exact algorithm change,
    deterministic diagrams, uncertainty, papers, and falsification experiment.
+
+Only the research direction is selected by the user. Alternative ideas are
+collapsed technical information, not a workflow decision. If no candidate
+passes, Part 2 performs one bounded evidence-expansion cycle without weakening
+gates or silently substituting fixtures, then reports an honest failure state.
 
 Architecture-oriented views remain under **Research Tools / 研究工具**. See
 [`THREE_PART_WORKFLOW.md`](THREE_PART_WORKFLOW.md).

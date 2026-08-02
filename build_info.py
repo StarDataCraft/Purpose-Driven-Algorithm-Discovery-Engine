@@ -19,7 +19,7 @@ PIPELINE_VERSION = "three-part-ux-v1"
 RUN_MODEL_SCHEMA_VERSION = "run-models-v1"
 UX_SCHEMA_VERSION = "selected-idea-context-v1"
 FINGERPRINT_FILES = (
-    "app.py", "ux_models.py", "models.py", "gap_consolidation.py",
+    "app.py", "ux_models.py", "primary_idea_selection.py", "models.py", "gap_consolidation.py",
     "idea_pipeline.py", "external_discovery_pipeline.py",
     "evaluation/schemas.py", "evaluation/audit_models.py",
     "evaluation/result_audit.py", "evaluation/capabilities.py",
@@ -74,6 +74,9 @@ def deployment_consistency(root: Path | None = None) -> dict[str, Any]:
     expected = {
         "app.py": manifest.get("app_source_fingerprint", ""),
         "ux_models.py": manifest.get("ux_models_source_fingerprint", ""),
+        "primary_idea_selection.py": manifest.get(
+            "primary_idea_selection_source_fingerprint", ""
+        ),
     }
     mismatches = [
         name for name, fingerprint in expected.items()

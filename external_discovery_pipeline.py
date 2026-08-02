@@ -257,9 +257,17 @@ def discover_external_mechanisms_for_direction(
     if mechanisms and not accepted:
         errors.append("Mechanisms were extracted, but no structural alignment passed hard validation.")
 
+    retrieved_paper_ids = {paper.paper_id for paper in papers}
     mechanism_paper_ids = {
         paper_id for mechanism in mechanisms for paper_id in mechanism.evidence_paper_ids
-    }
+    } & retrieved_paper_ids
+    if (retrieval_run.automatically_relevant_paper_count == 0
+            and mechanism_paper_ids):
+        warnings.append(
+            "No external paper passed problem-relevance scoring although "
+            "operational mechanism language was extracted; candidates remain "
+            "subject to hard evidence and alignment gates."
+        )
     for source in retrieval_run.source_results:
         source.mechanism_bearing_paper_count = len(
             set(source.paper_ids) & mechanism_paper_ids

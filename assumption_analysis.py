@@ -83,7 +83,7 @@ class AssumptionMismatch:
 CONDITION_PATTERNS = {
     "recurring_drift": r"recurring (?:concept )?drift|previously seen regimes return",
     "nonstationarity": r"nonstationar|concept drift|regime switch|regime change",
-    "inference_missingness": r"missing features? at inference|inference-time missing|complete features",
+    "inference_missingness": r"missing features? at inference|missing at inference|inference-time missing|complete features|training.?inference missingness|missingness shift",
     "correlated_features": r"correlated features?|interacting feature groups",
     "heterogeneous_density": r"heterogeneous|varying cluster density",
     "dynamic_component_count": r"cluster birth|cluster death|dynamic (?:cluster|component)",
@@ -155,12 +155,13 @@ def detect_assumption_mismatches(
     purpose: PurposeContract,
     variant_names: list[str] | None = None,
 ) -> list[AssumptionMismatch]:
-    variant_text = " ".join(variant_names or []).casefold()
+    selected_variants = {item.casefold() for item in (variant_names or [])}
     output = []
     for assumption in assumptions:
         if assumption.algorithm not in used_algorithms and assumption.algorithm_family not in used_algorithms:
             continue
-        if any(exception.casefold() in variant_text for exception in assumption.variant_exceptions):
+        if any(exception.casefold() in selected_variants
+               for exception in assumption.variant_exceptions):
             continue
         for condition in conditions:
             relation = RELATIONS.get(
@@ -195,6 +196,18 @@ def detect_assumption_mismatches(
                 unresolved_remainder="Validate the mismatch under matched conditions.",
             ))
     return output
+
+
+def purpose_condition_types(purpose: PurposeContract) -> set[str]:
+    """Return only condition topologies explicitly present in the purpose."""
+    text = " ".join([
+        purpose.current_failure, purpose.desired_improvement,
+        purpose.task, purpose.data_type,
+    ])
+    return {
+        condition_type for condition_type, pattern in CONDITION_PATTERNS.items()
+        if re.search(pattern, text, re.I)
+    }
 
 
 def mismatch_to_signature(mismatch: AssumptionMismatch, purpose: PurposeContract) -> GapSignature:

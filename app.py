@@ -67,6 +67,7 @@ from diagram_builders import (
 )
 from external_discovery_pipeline import SearchPolicy
 from idea_pipeline import derive_ideas_for_direction
+from primary_idea_selection import select_primary_idea
 
 PRIMARY_STEPS = [
     "1 · Discover directions / 发现方向",
@@ -243,6 +244,8 @@ def initialize_state() -> None:
         "selected_idea_selection_error": "",
         "selected_idea_selection_version": SELECTED_IDEA_SCHEMA_VERSION,
         "selected_idea_selection_error_details": {},
+        "primary_idea_selection_record": None,
+        "automatic_recovery_attempted": False,
         "pending_primary_step": "",
         "workflow_guidance": "",
         "current_result_explanation": None,
@@ -367,7 +370,8 @@ def invalidate_downstream_for_purpose() -> None:
         "selected_idea_selection_error": "",
         "selected_idea_selection_version": SELECTED_IDEA_SCHEMA_VERSION,
         "selected_idea_selection_error_details": {},
-        "selected_idea_choice": "",
+        "primary_idea_selection_record": None,
+        "automatic_recovery_attempted": False,
         "current_result_explanation": None, "current_diagram_specs": [],
         "current_result_audit": None,
         "current_audit_build_result": None,
@@ -392,7 +396,8 @@ def invalidate_downstream_for_gap() -> None:
     st.session_state.selected_idea_context = None
     st.session_state.selected_idea_selection_error = ""
     st.session_state.selected_idea_selection_error_details = {}
-    st.session_state.selected_idea_choice = ""
+    st.session_state.primary_idea_selection_record = None
+    st.session_state.automatic_recovery_attempted = False
     st.session_state.current_result_explanation = None
     st.session_state.current_result_audit = None
     st.session_state.current_audit_build_result = None
@@ -2297,12 +2302,19 @@ def render_workflow_status() -> None:
     ideas = st.session_state.current_idea_portfolio
     ready = validate_selected_idea_state() in {"COMPLETE", "LEGACY_CONTEXT"}
     st.subheader("Workflow status / 流程状态")
-    columns = st.columns(5)
+    selection = st.session_state.primary_idea_selection_record or {}
+    columns = st.columns(6)
     columns[0].metric("Research direction", "selected" if st.session_state.selected_direction_id else "not selected")
     columns[1].metric("External evidence", "ready" if st.session_state.current_external_result else "not ready")
-    columns[2].metric("Candidate ideas", f"{len(ideas)} generated")
-    columns[3].metric("Selected idea", selected_idea_name())
-    columns[4].metric("Part 3", "ready" if ready else "locked")
+    columns[2].metric(
+        "Candidate ideas",
+        f"{len(ideas)} evaluated internally" if ideas else "0 passed validation",
+    )
+    columns[3].metric("Primary idea", selected_idea_name())
+    columns[4].metric("Selection", "automatic" if selection.get("status") == "SELECTED" else "not available")
+    columns[5].metric(
+        "Part 3", "ready" if ready else "unavailable — no defensible idea",
+    )
     violations = selected_idea_invariant_violations()
     if violations:
         st.error("Selected-idea state invariant failed.")
@@ -2324,90 +2336,62 @@ def selection_error_details(candidate_id: str, exc: BaseException) -> dict[str, 
     }
 
 
-def render_candidate_selector(*, inline: bool = False) -> None:
-    """Render one explicit choice and one normal-branch commit action."""
+def render_primary_idea_summary() -> None:
+    """Render the already committed primary idea and optional alternatives."""
     candidates = {
         item.candidate_id: item for item in st.session_state.candidate_portfolio
     }
     derivations = {
         item.candidate_id: item for item in st.session_state.current_idea_portfolio
     }
-    candidate_ids = [
-        item.candidate_id for item in st.session_state.current_idea_portfolio
-        if item.candidate_id in candidates
-    ]
-    if not candidate_ids:
+    record = st.session_state.primary_idea_selection_record or {}
+    selected_id = str(record.get("selected_candidate_id", ""))
+    if selected_id not in candidates or selected_id not in derivations:
         return
-    categories = ["Conservative", "Balanced", "Ambitious"]
-    labels = {
-        candidate_id: f"{categories[min(index, 2)]} — {candidates[candidate_id].candidate_name}"
-        for index, candidate_id in enumerate(candidate_ids)
-    }
-    current_choice = st.session_state.get("selected_idea_choice")
-    formatted_choice = next(
-        (candidate_id for candidate_id, label in labels.items()
-         if current_choice == label), None,
-    )
-    if formatted_choice:
-        st.session_state.selected_idea_choice = formatted_choice
-    elif current_choice not in candidate_ids:
-        st.session_state.selected_idea_choice = (
-            st.session_state.selected_idea_id
-            if st.session_state.selected_idea_id in candidate_ids
-            else candidate_ids[0]
-        )
-    st.header("Candidate idea portfolio / 候选想法")
-    if inline:
-        st.warning("Your candidate ideas are available, but none is selected.")
-    else:
-        st.success(f"Candidate ideas are ready — {len(candidate_ids)} ideas were generated.")
-    choice = st.radio(
-        "Choose one idea to explain", candidate_ids,
-        format_func=lambda candidate_id: labels.get(candidate_id, candidate_id),
-        key="selected_idea_choice",
-    )
-    choice = next(
-        (candidate_id for candidate_id, label in labels.items()
-         if choice in {candidate_id, label}), choice,
-    )
-    candidate = candidates[choice]
-    derivation = derivations[choice]
-    st.subheader("Selected idea / 已选想法")
+    candidate = candidates[selected_id]
+    derivation = derivations[selected_id]
+    st.header("Primary idea derived / 已推导主想法")
     render_fields({
-        "Candidate title": candidate.candidate_name,
+        "Title": candidate.candidate_name,
+        "Why this idea was selected": record.get("selection_reason", "Selected by deterministic hard-gated ranking."),
         "Starting algorithm": candidate.base_algorithm,
-        "Exact modification slot": derivation.modification_slot,
-        "Borrowed mechanism": derivation.mechanism_name,
-        "Expected benefit": candidate.expected_improvement,
+        "Algorithm family": candidate.base_algorithm_family,
+        "Change": candidate_modification(candidate),
+        "Modification slot": derivation.modification_slot,
+        "External mechanism": derivation.mechanism_name,
+        "Expected metric effect": candidate.expected_improvement,
         "Main risk": candidate.expected_failure_modes[0]
         if candidate.expected_failure_modes else "unknown",
+        "Confidence": record.get("confidence", candidate.confidence),
     })
-    label = "Use this idea / 使用这个想法" if inline else "Continue to explanation / 进入想法解释"
-    if st.button(label, key="_commit_selected_idea", type="primary"):
-        try:
-            context = commit_selected_idea_by_id(choice)
-        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
-            st.session_state.selected_idea_selection_error = str(exc)
-            st.session_state.selected_idea_selection_error_details = selection_error_details(choice, exc)
-        else:
-            st.session_state.pending_primary_step = PRIMARY_STEPS[2]
-            st.session_state.workflow_guidance = ""
-            st.session_state.selected_idea_selection_error_details = {}
-            st.rerun()
-    if st.session_state.selected_idea_selection_error:
-        st.error(f"Could not select this idea. Reason: {st.session_state.selected_idea_selection_error}")
-        with st.expander("Technical details · selection error"):
-            st.write(st.session_state.selected_idea_selection_error_details)
-    elif st.session_state.selected_idea_id in candidate_ids:
-        raw = st.session_state.selected_idea_context
-        context = SelectedIdeaContext.from_dict(raw) if isinstance(raw, dict) else raw
-        st.success(f"Idea selected successfully — {selected_idea_name()}")
-        render_fields({
-            "Candidate ID": context.candidate_id,
-            "Direction": context.direction_id,
-            "Gap": context.gap_id,
-            "Selected timestamp": context.selected_at_utc,
-        })
+    if st.button(
+        "Continue to explanation / 查看完整解释",
+        key="_continue_to_explanation", type="primary",
+    ):
+        st.session_state.pending_primary_step = PRIMARY_STEPS[2]
+        st.session_state.workflow_guidance = ""
+        st.rerun()
+    alternatives = [
+        item for item in record.get("ranking_records", [])
+        if item.get("candidate_id") != selected_id
+    ]
+    if alternatives:
+        with st.expander("Other ideas considered / 其他备选想法", expanded=False):
+            for item in sorted(
+                alternatives,
+                key=lambda value: (not value.get("passed_hard_gates"),
+                                   value.get("rank") or 999,
+                                   value.get("candidate_id", "")),
+            ):
+                alternative = candidates.get(item.get("candidate_id"))
+                if alternative:
+                    render_fields({
+                        "Title": alternative.candidate_name,
+                        "Main advantage": alternative.expected_improvement,
+                        "Main weakness": item.get("non_selection_reason")
+                        or readable_items(item.get("gate_failures", [])),
+                        "Score": item.get("weighted_score", 0),
+                    })
 
 
 def set_external_live_retry() -> None:
@@ -2685,6 +2669,26 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
         fixture_loader=lambda: load_fixture("external_papers.json"),
         progress_callback=progress_callback if callable(progress_callback) else None,
     )
+    recovery_used = False
+    if not result.portfolio and not st.session_state.automatic_recovery_attempted:
+        st.session_state.automatic_recovery_attempted = True
+        recovery_used = True
+        recovery_policy = SearchPolicy(
+            requested_mode=policy.requested_mode,
+            sources=policy.sources,
+            allow_cache=policy.allow_cache,
+            force_fresh=policy.force_fresh or policy.requested_mode.upper() == "LIVE",
+            allow_offline_fallback=False,
+            maximum_per_query=min(12, policy.maximum_per_query + 2),
+            maximum_total=min(100, policy.maximum_total + 20),
+        )
+        result = derive_ideas_for_direction(
+            purpose=st.session_state.purpose, direction=direction, gap=gap,
+            parent_run=run, search_policy=recovery_policy,
+            seed=st.session_state.seed + 1, memory_path=DEFAULT_DB,
+            fixture_loader=lambda: load_fixture("external_papers.json"),
+            progress_callback=progress_callback if callable(progress_callback) else None,
+        )
     st.session_state.current_external_result = result.external_result
     st.session_state.external_papers = result.external_result.papers
     st.session_state.current_external_run = result.external_result.retrieval_run
@@ -2694,10 +2698,25 @@ def build_current_idea_portfolio(progress_callback: object | None = None) -> Non
     st.session_state.candidate_portfolio = result.portfolio
     st.session_state.direction_families = result.direction_families
     st.session_state.current_idea_portfolio = result.derivations
+    selection = select_primary_idea(
+        candidates=result.portfolio, derivations=result.derivations,
+        direction=direction, gap=gap, parent_run=run,
+        automatic_recovery_used=recovery_used,
+    )
+    st.session_state.primary_idea_selection_record = selection.to_dict()
+    if selection.status == "SELECTED":
+        commit_idea_selection(
+            candidate=selection.selected_candidate,
+            derivation=selection.selected_derivation,
+            direction=direction, gap=gap, run=run,
+        )
     st.session_state.candidate_run_diagnostics = {
         **result.diagnostics,
         "error": "; ".join(result.external_result.errors),
         "warnings": result.external_result.warnings,
+        "automatic_recovery_attempted": recovery_used,
+        "primary_selection_status": selection.status,
+        "candidate_rejection_reasons": selection.rejection_reasons,
     }
     generate_quality_warnings(run)
 
@@ -2796,7 +2815,7 @@ def analyze_gap_page() -> None:
         st.markdown(f"- {uncertainty}")
     if not st.session_state.current_idea_portfolio:
         if st.button(
-            "Search external evidence and derive ideas / 检索外部证据并推导想法",
+            "Analyze the gap and derive the idea / 分析 Gap 并推导新想法",
             type="primary", key="_derive_ideas",
             help="Automatically searches external literature, extracts mechanisms, "
                  "tests structural alignment, and builds candidate ideas.",
@@ -2811,8 +2830,6 @@ def analyze_gap_page() -> None:
             st.session_state.ux_performance[
                 "part_2_analysis_seconds"
             ] = round(time.perf_counter() - part_started, 4)
-    if st.session_state.current_idea_portfolio:
-        render_candidate_selector()
     external = st.session_state.current_external_result
     if external:
         st.header("Normalized problem / 规范化问题")
@@ -2832,7 +2849,12 @@ def analyze_gap_page() -> None:
                     "Domain": selection.domain,
                     "Why selected": readable_items(selection.reasons),
                     "Matched roles": readable_items(selection.matched_problem_roles),
-                    "Relevance": round(selection.relevance_score, 2),
+                    "Unmatched required roles": readable_items(selection.unmatched_required_roles),
+                    "Problem-topology compatibility": selection.problem_topology_compatibility,
+                    "Likely mechanism value": selection.likely_mechanism_value,
+                    "Query specificity": selection.query_specificity,
+                    "Analogy risk": selection.analogy_risk,
+                    "Selection score": round(selection.relevance_score, 3),
                     "Analogy limitations": readable_items(selection.missing_correspondence),
                 })
         st.header("External search evidence / 外部检索证据")
@@ -2849,8 +2871,8 @@ def analyze_gap_page() -> None:
             "Queries": sum(len(items) for items in external.accepted_queries_by_domain.values()),
             "Papers retrieved": retrieval.raw_paper_count,
             "Papers after deduplication": retrieval.deduplicated_paper_count,
-            "Automatically relevant": retrieval.automatically_relevant_paper_count,
-            "Mechanism-bearing papers": len(
+            "External-problem relevant papers": retrieval.automatically_relevant_paper_count,
+            "Papers with validated operational mechanisms": len(
                 st.session_state.current_research_run.mechanism_bearing_paper_ids
             ),
             "Cache used": "Yes" if retrieval.cache_used else "No",
@@ -2865,6 +2887,19 @@ def analyze_gap_page() -> None:
     ideas = st.session_state.current_idea_portfolio
     if not ideas:
         diagnostics = st.session_state.candidate_run_diagnostics or {}
+        selection = st.session_state.primary_idea_selection_record or {}
+        if selection:
+            st.error("No defensible primary idea was derived.")
+            render_fields({
+                "External papers": diagnostics.get("paper_count", 0),
+                "Valid mechanisms": diagnostics.get("mechanism_count", 0),
+                "Accepted alignments": diagnostics.get("accepted_alignment_count", 0),
+                "Draft candidates": len(st.session_state.candidate_portfolio),
+                "Selection status": selection.get("status", "FAILED"),
+                "Rejection reasons": selection.get("rejection_reasons", {}),
+                "Automatic recovery": "attempted" if diagnostics.get("automatic_recovery_attempted") else "not needed",
+                "Recovery actions": "Rerun external evidence search; broaden the publication range; choose another direction; or inspect rejected candidates.",
+            })
         if diagnostics.get("error"):
             st.error(diagnostics["error"])
             render_fields({
@@ -2939,30 +2974,7 @@ def analyze_gap_page() -> None:
             "Conflicts": readable_items(alignment.conflicts),
             "Analogy boundary": "Structural correspondence only; literal equivalence is not assumed.",
         })
-    st.header("Candidate idea details / 候选想法详情")
-    candidates = {
-        item.candidate_id: item for item in st.session_state.candidate_portfolio
-    }
-    categories = ["Conservative idea", "Balanced idea", "Ambitious idea"]
-    for index, derivation in enumerate(ideas):
-        candidate = candidates[derivation.candidate_id]
-        with st.container(border=True):
-            st.subheader(f"{categories[min(index, 2)]}: {candidate.candidate_name}")
-            render_fields({
-                "Problem addressed": derivation.problem_statement,
-                "Starting algorithm": candidate.base_algorithm,
-                "Exact modification slot": derivation.modification_slot,
-                "Borrowed mechanism": derivation.mechanism_name,
-                "Change": candidate_modification(candidate),
-                "Expected benefit": candidate.expected_improvement,
-                "Main cost": candidate.complexity_delta,
-                "Main risk": candidate.expected_failure_modes[0]
-                if candidate.expected_failure_modes else "unknown",
-                "Nearest known method": ", ".join(derivation.known_method_neighbors)
-                or "not established",
-                "Novelty": derivation.novelty_status,
-                "Feasibility": candidate.confidence,
-            })
+    render_primary_idea_summary()
 
 
 def render_diagram(spec: dict[str, object]) -> None:
@@ -3153,18 +3165,17 @@ def explain_idea_page() -> None:
         status = "SNAPSHOT_INVALID"
         resolved = None
     if not resolved:
-        if (st.session_state.candidate_portfolio
-                and st.session_state.current_idea_portfolio):
-            render_candidate_selector(inline=True)
-            return
         if status == "NOT_SELECTED_NO_PORTFOLIO":
-            st.info("No ideas have been generated. Return to Part 2 and derive ideas.")
+            st.info(
+                "No validated idea is available for explanation. Return to Part 2 "
+                "to rerun external evidence search or choose another direction."
+            )
         elif status == "SELECTION_COMMIT_FAILED":
             st.error(f"Could not select this idea. Reason: {st.session_state.selected_idea_selection_error}")
         elif status == "CANDIDATE_DERIVATION_MISMATCH":
             st.error(
                 "The selected candidate no longer matches its derivation. "
-                "Return to Part 2 and select the idea again."
+                "Return to Part 2 and rerun automatic idea derivation."
             )
         elif status == "DIRECTION_MISMATCH":
             st.error(
@@ -3461,13 +3472,11 @@ def main() -> None:
     page = sidebar()
     if page == PRIMARY_STEPS[2] and validate_selected_idea_state() not in {
         "COMPLETE", "LEGACY_CONTEXT", "RECOVERABLE_ID_ONLY",
-        "NOT_SELECTED_PORTFOLIO_AVAILABLE", "SELECTION_COMMIT_FAILED",
-        "SNAPSHOT_INVALID",
     }:
         fallback = PRIMARY_STEPS[1] if st.session_state.selected_direction_id else PRIMARY_STEPS[0]
         st.session_state.pending_primary_step = fallback
         st.session_state.workflow_guidance = (
-            "Choose a candidate idea below before opening Part 3."
+            "No validated primary idea is available. Run Part 2 analysis first."
             if fallback == PRIMARY_STEPS[1]
             else "Select a research direction before opening Part 3."
         )

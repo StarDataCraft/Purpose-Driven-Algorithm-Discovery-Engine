@@ -132,7 +132,7 @@ future adequately sized adjudicated dataset.
 | Recovery metric expansion | PASS | Controlled recurring-drift metric family and tests. |
 | Query quality controls | PASS | Length, malformed phrase, unsupported algorithm, information and duplicate gates. |
 | Native external translation | PASS | Ten deterministic profiles; recurring-drift translation tests. |
-| Relevant domain selection | PASS | Role-based scoring selects five high-correspondence domains by default. |
+| Relevant domain selection | PASS | Direction-specific role, topology, mechanism-value, query-specificity, and analogy-risk scoring selects three domains by default. |
 | Shared run identity | PASS | External stage and candidates retain the originating `run_id`. |
 | Research-memory provenance | PASS | Runs and papers persist alongside scientific records and candidates. |
 | No generative LLM | PASS | Controlled vocabularies, rules, TF-IDF and optional local encoders only. |
@@ -157,14 +157,14 @@ future adequately sized adjudicated dataset.
 | No quality overclaim | PASS | Reports and UI warn that synthetic/automated labels are not ground truth. |
 ## Part 2 → Part 3 state-transition acceptance
 
-- Candidate and derivation are validated and committed atomically.
-- Candidate choice uses one candidate-ID-backed selector and one explicit
-  Continue button; no domain objects cross a button callback boundary.
+- Candidate and derivation are hard-gated, ranked, and committed atomically.
+- Candidate evaluation is internal; there is no candidate selector. The one
+  Continue button only navigates to the already committed primary idea.
 - Part 3 renders from versioned immutable snapshots and survives cleared
   candidate and derivation portfolios.
 - Ordinary reruns and backward navigation preserve the selected idea.
 - A direction or gap change invalidates the old selection; same-direction reuse
   preserves it.
-- The deployment smoke test completes Part 1 → Part 2 → first Part 3 result,
-  returns to Part 2, and verifies a second clicked candidate in Part 3.
+- The deployment smoke test verifies automatic context creation in Part 2 and
+  then opens that same primary idea in Part 3 without candidate interaction.
 - Optional audit or persistence failure cannot erase the core explanation.

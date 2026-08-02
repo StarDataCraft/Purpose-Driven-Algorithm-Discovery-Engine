@@ -180,3 +180,14 @@ Part 3 resolves immutable snapshots before any session portfolio lookup. Legacy
 ID-only sessions can recover from both portfolios and are upgraded immediately.
 Optional audit persistence and diagram rendering are downstream capabilities;
 their failure does not invalidate the selected context.
+
+`primary_idea_selection.select_primary_idea()` is Streamlit-independent. It
+enforces run, evidence, operational-mechanism, alignment, algorithm-family,
+modification, information-availability, metric, experiment, prior-art,
+kill-criterion, and uncertainty gates before stable weighted ranking. Part 2
+commits the winner immediately and keeps alternatives only for audit.
+
+Gap promotion rejects incomplete structured fields and unknown algorithm
+families. Consolidation fingerprints constrain task, modality, algorithm
+family, failure topology, scope, component, and metric, so broad semantic
+similarity cannot merge incompatible paper roles.

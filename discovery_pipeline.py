@@ -8,7 +8,9 @@ import time
 from typing import Callable
 
 from app_settings import SETTINGS, Settings
-from assumption_analysis import AssumptionMismatch, detect_assumption_mismatches
+from assumption_analysis import (
+    AssumptionMismatch, detect_assumption_mismatches, purpose_condition_types,
+)
 from assumption_analysis import extract_observed_conditions, load_assumption_registry
 from assumption_analysis import mismatch_to_signature
 from contradiction_analysis import ContradictoryEvidenceGap
@@ -108,8 +110,12 @@ def discover_structural_gaps(
         for item in (record.algorithm, record.algorithm_family)
         if item != "UNKNOWN"
     }
+    active_conditions = purpose_condition_types(purpose)
     mismatches = detect_assumption_mismatches(
-        load_assumption_registry(), conditions, used_algorithms, purpose
+        load_assumption_registry(), [
+            item for item in conditions
+            if item.condition_type in active_conditions
+        ], used_algorithms, purpose,
     )
 
     explicit = mine_explicit_gaps(limited_papers, purpose)

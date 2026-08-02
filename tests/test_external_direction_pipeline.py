@@ -57,6 +57,13 @@ def test_live_direction_automatically_retrieves_and_derives_ideas(
     assert result.derivations
     assert run.stage_records["external_discovery"]["selected_direction_id"] == direction.direction_id
     assert not any("Step 4" in item for item in result.external_result.errors)
+    external_ids = {item.paper_id for item in result.external_result.papers}
+    mechanism_ids = set(run.mechanism_bearing_paper_ids)
+    assert mechanism_ids <= external_ids
+    assert all(
+        source.mechanism_bearing_paper_count <= source.unique_returned_count
+        for source in result.external_result.retrieval_run.source_results
+    )
 
 
 def test_mixed_parent_inherits_requested_live_policy(

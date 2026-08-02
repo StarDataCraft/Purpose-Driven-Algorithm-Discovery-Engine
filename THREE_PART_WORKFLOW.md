@@ -65,21 +65,20 @@ Part 3 exports readable Markdown, structured JSON, DOT diagrams, and experiment
 Markdown. Automatic relevance remains separate from human review; paper claims
 remain separate from inference; novelty and expected improvement remain
 unverified until external evaluation.
-## Atomic Part 2 → Part 3 selection
+## Automatic Part 2 → Part 3 promotion
 
-Part 2 presents one candidate-ID-backed radio selector, a visible selected-idea
-summary, and one `Continue to explanation` button. The normal render branch
-resolves and validates the candidate, derivation, direction, gap, and parent
-run, stores a plain versioned `SelectedIdeaContext` dictionary, verifies the
-stored identities, and performs exactly one rerun into Part 3. Candidate domain
-objects are never passed through a button callback.
+Only the research direction is selected by the user. Part 2 generates an
+internal portfolio, applies non-overridable scientific gates, deterministically
+ranks the survivors, stores a plain versioned `SelectedIdeaContext`, and
+verifies its identities before rendering. `Continue to explanation` performs
+navigation only; the primary workflow contains no candidate selector.
 
 Part 3 reconstructs its inputs from the context snapshots first. Mutable Part 2
 portfolios are used only to recover an older ID-only session, and successful
 recovery is immediately upgraded to a context. Back navigation retains the
 portfolio and context. A purpose, run, direction, or gap change invalidates the
-context; selecting another idea in the same portfolio replaces only Part 3
-products.
+context. Alternatives remain collapsed, read-only technical information.
 
-Manual Part 3 navigation is guided back to the missing prerequisite. When ideas
-exist but none is selected, Part 3 presents the same compact selector inline.
+Manual Part 3 navigation is guided back to Part 2 when no validated primary
+idea exists. One bounded evidence recovery may run; failed recovery produces a
+no-defensible-idea state. Part 3 never presents a selector.

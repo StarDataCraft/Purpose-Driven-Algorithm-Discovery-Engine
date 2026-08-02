@@ -19,9 +19,12 @@ from build_info import build_information, load_deployment_manifest
 
 REQUIRED_MARKERS = (
     "Workflow status / 流程状态",
-    "Continue to explanation / 进入想法解释",
+    "Continue to explanation / 查看完整解释",
 )
-FORBIDDEN_MARKERS = ("Select an idea in Part 2.",)
+FORBIDDEN_MARKERS = (
+    "Select an idea in Part 2.", "Choose a candidate idea",
+    "Choose one idea to explain",
+)
 
 
 def expected_deployment() -> dict[str, object]:

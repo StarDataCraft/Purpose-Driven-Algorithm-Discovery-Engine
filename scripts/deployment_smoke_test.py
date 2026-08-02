@@ -89,11 +89,12 @@ def main() -> None:
     assert "Build:" in sidebar_text
     assert "Pipeline: three-part-ux-v1" in sidebar_text
     assert "UX schema: selected-idea-context-v1" in sidebar_text
-    assert "Source fingerprint: c1f35d26" in sidebar_text
+    expected_app = info["source_fingerprints"]["app.py"][:8]
+    assert f"Source fingerprint: {expected_app}" in sidebar_text
     assert "Deployment consistency: CONSISTENT" in sidebar_text
     page_captions = " ".join(str(item.value) for item in at.caption)
     assert "Running build:" in page_captions
-    assert "app.py c1f35d26" in page_captions
+    assert f"app.py {expected_app}" in page_captions
     at.sidebar.selectbox(key="_research_tool").set_value("Build information")
     at.run(timeout=30)
     assert not at.exception
@@ -119,14 +120,14 @@ def main() -> None:
     assert at.session_state["selected_direction_id"]
     at.button(key="_derive_ideas").click().run(timeout=30)
     assert len(at.session_state["current_idea_portfolio"]) >= 2
-    first_id = at.session_state["current_idea_portfolio"][0].candidate_id
-    selector = at.radio(key="selected_idea_choice")
-    assert len(selector.options) >= 2
-    at.button(key="_commit_selected_idea").click().run(timeout=30)
+    first_id = at.session_state["primary_idea_selection_record"]["selected_candidate_id"]
+    assert at.session_state["primary_idea_selection_record"]["status"] == "SELECTED"
+    assert not any(item.key == "selected_idea_choice" for item in at.radio)
     context = at.session_state["selected_idea_context"]
     assert isinstance(context, dict) and context["candidate_id"] == first_id
     assert context["candidate_snapshot"]["candidate_id"] == first_id
     assert context["derivation_snapshot"]["candidate_id"] == first_id
+    at.button(key="_continue_to_explanation").click().run(timeout=30)
     assert at.session_state["current_result_explanation"].candidate_id == first_id
     headings = " ".join(item.value for item in at.header)
     assert at.session_state["current_result_explanation"].title in headings
@@ -140,13 +141,8 @@ def main() -> None:
     part_2 = "2 · Analyze the gap / 分析 Gap"
     at.radio(key="_primary_step").set_value(part_2).run(timeout=30)
     assert at.session_state["current_idea_portfolio"]
-    second_id = at.session_state["current_idea_portfolio"][1].candidate_id
-    selector = at.radio(key="selected_idea_choice")
-    selector.set_value(selector.options[1]).run(timeout=30)
-    at.button(key="_commit_selected_idea").click().run(timeout=30)
-    assert at.session_state["selected_idea_context"]["candidate_id"] == second_id
-    assert at.session_state["current_result_explanation"].candidate_id == second_id
-    assert first_id != second_id
+    assert at.session_state["selected_idea_context"]["candidate_id"] == first_id
+    assert at.button(key="_continue_to_explanation")
     assert not at.exception
     print("deployment smoke test: OK")
 

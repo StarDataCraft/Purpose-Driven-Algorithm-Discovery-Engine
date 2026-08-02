@@ -54,7 +54,10 @@ def test_domain_native_queries_exclude_ml_metrics(ml_papers, purpose):
         item for item in mine_gaps(ml_papers, purpose)
         if "recurring" in item.failure_type
     )
-    queries = generate_external_queries(gap)
+    queries = generate_external_queries(
+        gap, ["biology", "ecology", "immunology", "neuroscience",
+              "physics", "control_theory", "dynamical_systems"],
+    )
     forbidden = {"online accuracy", "stationary distribution"}
     for domain in ("biology", "ecology", "immunology", "neuroscience", "physics"):
         joined = " ".join(queries.get(domain, [])).casefold()
@@ -78,7 +81,5 @@ def test_domain_selection_prioritizes_recurrence_analogues(ml_papers, purpose):
         item.domain for item in select_external_domains(signature)
         if item.selected
     }
-    assert {
-        "immunology", "ecology", "control_theory", "neuroscience",
-        "dynamical_systems",
-    } <= selected
+    assert len(selected) == 3
+    assert {"immunology", "control_theory", "dynamical_systems"} <= selected

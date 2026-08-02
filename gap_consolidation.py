@@ -60,6 +60,69 @@ def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
 
 
+INCOMPLETE_ENDINGS = {
+    "under", "in", "with", "for", "of", "to", "from", "by", "during",
+    "against", "between", "and", "or", "the", "a", "an",
+}
+
+
+def promoted_gap_validation_reasons(gap: GapSignature) -> list[str]:
+    """Reject malformed or scientifically unbound structured gap records."""
+    reasons: list[str] = []
+    required = {
+        "title": gap.title, "task": gap.task,
+        "failure condition": gap.failure_type,
+        "affected component": gap.affected_component,
+        "primary metric": gap.primary_metric,
+        "required response": gap.required_response,
+        "unresolved remainder": gap.unresolved_remainder,
+    }
+    for label, value in required.items():
+        if not str(value).strip():
+            reasons.append(f"missing {label}")
+    for label, value, minimum in (
+        ("title", gap.title, 4), ("failure condition", gap.failure_type, 2),
+        ("required response", gap.required_response, 3),
+    ):
+        words = _normalized(str(value)).split()
+        if len(words) < minimum or (words and words[-1] in INCOMPLETE_ENDINGS):
+            reasons.append(f"incomplete {label}")
+    family = _normalized(gap.affected_algorithm_family)
+    if family in {"", "unknown", "unspecified", "none"}:
+        reasons.append("algorithm family is unknown")
+    metric = _normalized(gap.primary_metric)
+    if metric in {"", "unknown", "unspecified", "performance", "quality"}:
+        reasons.append("metric is not condition-specific")
+    if gap.evidence_count < 1 or not gap.evidence_sentences:
+        reasons.append("no evidence source")
+    return list(dict.fromkeys(reasons))
+
+
+def purpose_compatibility_reasons(
+    gap: GapSignature, purpose: PurposeContract,
+) -> list[str]:
+    purpose_text = _normalized(
+        f"{purpose.task} {purpose.current_failure} {purpose.desired_improvement}"
+    )
+    gap_text = _normalized(
+        f"{gap.task} {gap.failure_type} {gap.required_response} {gap.title}"
+    )
+    topology_terms = {
+        "recurrence": ("recurr", "drift", "regime"),
+        "missingness": ("missing", "feature availability"),
+        "component lifecycle": ("cluster birth", "cluster death", "component", "heterogeneous density"),
+    }
+    active = [
+        (label, terms) for label, terms in topology_terms.items()
+        if any(term in purpose_text for term in terms)
+    ]
+    if active and not any(
+        any(term in gap_text for term in terms) for _, terms in active
+    ):
+        return ["gap failure topology is incompatible with the user purpose"]
+    return []
+
+
 def _scope(gap: GapSignature) -> str:
     text = " ".join([
         gap.failure_type, gap.required_response, *gap.evidence_sentences
@@ -167,7 +230,13 @@ def consolidate_gaps(
         known_search_sufficient = bool(known)
         reasons = []
         status = "PROMOTED"
-        if len(papers) < 2:
+        structured_failures = [
+            *promoted_gap_validation_reasons(representative),
+            *purpose_compatibility_reasons(representative, purpose),
+        ]
+        if structured_failures:
+            status, reasons = "MALFORMED_OR_UNBOUND", structured_failures
+        elif len(papers) < 2:
             status, reasons = "SINGLE_PAPER", ["fewer than two independent papers"]
         elif representative.metadata_completeness and representative.metadata_completeness < .55:
             status, reasons = "METADATA_ARTIFACT", ["metadata completeness below 0.55"]

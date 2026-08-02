@@ -27,17 +27,19 @@ def test_manifest_matches_runtime_sources():
 
 
 def test_build_identity_is_visible_on_first_render():
+    manifest = build_info.load_deployment_manifest(ROOT)
+    expected = manifest["app_source_fingerprint"][:8]
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
     assert not app.exception
     sidebar_text = " ".join(str(item.value) for item in app.sidebar.caption)
     assert "Build:" in sidebar_text
     assert "Pipeline: three-part-ux-v1" in sidebar_text
     assert "UX schema: selected-idea-context-v1" in sidebar_text
-    assert "Source fingerprint: c1f35d26" in sidebar_text
+    assert f"Source fingerprint: {expected}" in sidebar_text
     assert "Deployment consistency: CONSISTENT" in sidebar_text
     page_text = " ".join(str(item.value) for item in app.caption)
     assert "Running build:" in page_text
-    assert "app.py c1f35d26" in page_text
+    assert f"app.py {expected}" in page_text
 
 
 def test_build_identity_survives_missing_git_metadata(monkeypatch):
@@ -53,17 +55,18 @@ def test_build_identity_survives_missing_git_metadata(monkeypatch):
     monkeypatch.setattr(build_info.subprocess, "run", unavailable)
     info = build_info.build_information()
     assert info["commit_sha"] == "unknown"
-    assert info["source_fingerprints"]["app.py"].startswith("c1f35d26")
+    manifest = build_info.load_deployment_manifest(ROOT)
+    assert info["source_fingerprints"]["app.py"] == manifest["app_source_fingerprint"]
     assert info["deployment_consistency"]["status"] == "CONSISTENT"
 
 
 def test_semantic_verifier_rejects_the_obsolete_instruction():
     current = verify_html(
-        "Workflow status / 流程状态 Continue to explanation / 进入想法解释"
+        "Workflow status / 流程状态 Continue to explanation / 查看完整解释"
     )
     assert current["status"] == "MATCH"
     stale = verify_html(
-        "Workflow status / 流程状态 Continue to explanation / 进入想法解释 "
+        "Workflow status / 流程状态 Continue to explanation / 查看完整解释 "
         "Select an idea in Part 2."
     )
     assert stale["status"] == "SEMANTIC_MISMATCH"
