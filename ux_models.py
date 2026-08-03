@@ -52,6 +52,12 @@ class SelectedIdeaContext:
     maturity_limiters: tuple[dict[str, Any], ...] = ()
     repair_options: tuple[str, ...] = ()
     open_design_choices: tuple[dict[str, Any], ...] = ()
+    resolved_hypothesis_snapshot: dict[str, Any] = field(default_factory=dict)
+    final_evidence_assessment: dict[str, Any] = field(default_factory=dict)
+    final_alignment_assessment: dict[str, Any] = field(default_factory=dict)
+    final_operator_plan: dict[str, Any] = field(default_factory=dict)
+    repairs_applied: tuple[dict[str, Any], ...] = ()
+    experiment_spec: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -63,6 +69,12 @@ class SelectedIdeaContext:
         values["maturity_limiters"] = tuple(values.get("maturity_limiters", ()))
         values["repair_options"] = tuple(values.get("repair_options", ()))
         values["open_design_choices"] = tuple(values.get("open_design_choices", ()))
+        values["repairs_applied"] = tuple(values.get("repairs_applied", ()))
+        for key in (
+            "resolved_hypothesis_snapshot", "final_evidence_assessment",
+            "final_alignment_assessment", "final_operator_plan", "experiment_spec",
+        ):
+            values[key] = dict(values.get(key, {}))
         return cls(**values)
 
 
@@ -590,10 +602,13 @@ def build_idea_explanation(
     purpose: PurposeContract, direction: DirectionSummary,
     derivation: IdeaDerivation, candidate: AlgorithmCandidate,
     diagram_specs: list[dict[str, Any]],
+    resolved_hypothesis: dict[str, Any] | None = None,
 ) -> IdeaExplanation:
-    direct_count = sum(
-        role == "DIRECT_FAILURE_EVIDENCE"
-        for role in direction.paper_roles.values()
+    resolved = resolved_hypothesis or {}
+    evidence = resolved.get("evidence", {})
+    direct = list(evidence.get("direct_problem_evidence", ()))
+    direct_count = len(direct) if resolved else sum(
+        role == "DIRECT_FAILURE_EVIDENCE" for role in direction.paper_roles.values()
     )
     supported = tuple(dict.fromkeys([
         (
@@ -612,7 +627,8 @@ def build_idea_explanation(
     )
     return IdeaExplanation(
         f"explanation:{candidate.candidate_id}", derivation.parent_run_id,
-        direction.direction_id, candidate.candidate_id, candidate.candidate_name,
+        direction.direction_id, candidate.candidate_id,
+        str(resolved.get("title", candidate.candidate_name)),
         f"Modify {candidate.base_algorithm}'s {candidate.affected_component} "
         f"using {derivation.mechanism_name} to address "
         f"{direction.failure_condition}.",
@@ -623,9 +639,13 @@ def build_idea_explanation(
         candidate.expected_improvement,
         f"If {derivation.mechanism_signal} identifies the relevant condition, "
         f"{derivation.mechanism_response} may avoid relearning from scratch.",
-        candidate.base_algorithm, candidate.affected_component,
+        candidate.base_algorithm,
+        " + ".join(resolved.get("selected_slot_bundle", ()))
+        or candidate.affected_component,
         tuple(candidate.new_state_variables), derivation.mechanism_trigger,
-        candidate_modification(candidate), tuple(candidate.required_training_information),
+        str(resolved.get("schematic_operator") or resolved.get("exact_operator")
+            or candidate_modification(candidate)),
+        tuple(candidate.required_training_information),
         tuple(candidate.required_inference_information),
         candidate.complexity_delta, candidate.memory_delta, purpose.use_case,
         tuple(candidate.must_not_degrade),
@@ -634,7 +654,13 @@ def build_idea_explanation(
         supported, inferred,
         tuple(dict.fromkeys([*derivation.uncertainties,
                              "Potential novelty remains unverified."])),
-        tuple(candidate.falsification_tests), asdict(candidate.minimal_experiment),
-        tuple(candidate.evidence_paper_ids), tuple(diagram_specs),
+        tuple(candidate.falsification_tests),
+        dict(resolved.get("experiment_spec", asdict(candidate.minimal_experiment))),
+        tuple(item.get("paper_id", "") for group in (
+            evidence.get("direct_problem_evidence", ()),
+            evidence.get("external_mechanism_evidence", ()),
+            evidence.get("current_solution_evidence", ()),
+        ) for item in group) if resolved else tuple(candidate.evidence_paper_ids),
+        tuple(diagram_specs),
         derivation.confidence_by_stage,
     )

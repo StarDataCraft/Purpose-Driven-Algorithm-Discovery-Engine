@@ -24,7 +24,7 @@ FINGERPRINT_FILES = (
     "primary_idea_contracts.py",
     "primary_idea_selection.py", "models.py", "gap_consolidation.py",
     "idea_pipeline.py", "external_discovery_pipeline.py", "session_schema.py",
-    "pipeline_quality.py",
+    "resolved_hypothesis.py", "pipeline_quality.py",
     "evaluation/schemas.py", "evaluation/audit_models.py",
     "evaluation/result_audit.py", "evaluation/capabilities.py",
 )
@@ -96,6 +96,9 @@ def deployment_consistency(root: Path | None = None) -> dict[str, Any]:
             "external_discovery_pipeline_source_fingerprint", ""
         ),
         "session_schema.py": manifest.get("session_schema_source_fingerprint", ""),
+        "resolved_hypothesis.py": manifest.get(
+            "resolved_hypothesis_source_fingerprint", ""
+        ),
         "pipeline_quality.py": manifest.get("pipeline_quality_source_fingerprint", ""),
     }
     mismatches = [

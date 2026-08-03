@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import app as app_module
 
 from discovery_pipeline import discover_structural_gaps
 from external_discovery_pipeline import SearchPolicy
@@ -28,6 +29,7 @@ from scientific_validation import (
     validate_candidate_for_promotion,
 )
 from run_models import ResearchRun
+from resolved_hypothesis import ResolvedHypothesis, validate_resolved_hypothesis
 from ux_models import build_direction_portfolio
 
 
@@ -229,19 +231,78 @@ def test_predictive_random_forest_regression_cannot_be_primary(selection_case, p
         gap=gap, parent_run=run, purpose=purpose, papers=papers,
         full_audits={candidate.candidate_id: audit},
     )
-    assert result.status == "NO_COHERENT_IDEA"
-    assert not result.selected_candidate_id
-    reasons = result.rejection_reasons[candidate.candidate_id]
+    assert result.status == "EXPLORATORY_AVAILABLE", result.rejection_reasons
+    assert result.selected_candidate_id == candidate.candidate_id
+    resolved = result.selected_resolved_hypothesis
+    assert resolved is not None
+    assert resolved.maturity_level == "EXPLORATORY_HYPOTHESIS"
+    assert resolved.algorithm_family == "online tree ensemble"
+    assert resolved.algorithm_variant == "online tree ensemble"
+    assert resolved.title == "Delayed-feedback recurrence correction for an online tree ensemble"
+    assert "Random Forest" not in resolved.title
+    assert resolved.information_timing == "DELAYED"
+    assert "prediction residual" not in " ".join(
+        resolved.candidate_snapshot["required_inference_information"]
+    ).casefold()
+    assert len(resolved.selected_slot_bundle) > 1
+    assert resolved.derivation_snapshot["modification_slot"] != "update_rule"
+    assert not resolved.exact_operator
+    assert resolved.schematic_operator.startswith("Schematic operator — not yet specified")
+    assert not resolved.evidence.direct_problem_evidence
+    assert not any("directly supports" in item.casefold() for item in resolved.strengths)
+    assert resolved.alignment.level == "SURFACE_ONLY"
+    assert not any("structural roles map" in item.casefold() for item in resolved.strengths)
+    assert {item["paper_id"] for item in resolved.evidence.irrelevant_or_rejected_papers} >= {
+        "regression:hardware", "regression:chimera",
+    }
+    supporting = {
+        item["paper_id"] for group in (
+            resolved.evidence.direct_problem_evidence,
+            resolved.evidence.external_mechanism_evidence,
+            resolved.evidence.current_solution_evidence,
+        ) for item in group
+    }
+    assert "regression:chimera" not in supporting
+    assert resolved.experiment_spec["base_algorithm"] == "online tree ensemble"
+    assert "adaptive random forest" in resolved.experiment_spec["baselines"]
+    assert "delayed-label" in resolved.experiment_spec["stressor"]
+    assert ResolvedHypothesis.from_dict(resolved.to_dict()) == resolved
+    inconsistent = replace(
+        resolved,
+        experiment_spec={**resolved.experiment_spec, "base_algorithm": "Random Forest"},
+    )
+    assert "experiment algorithm differs from resolved algorithm" in validate_resolved_hypothesis(inconsistent)
+    state = {
+        "primary_idea_selection_record": result.to_dict(),
+        "selected_direction_id": direction.direction_id,
+        "selected_gap_id": gap.gap_id,
+        "current_result_explanation": "stale explanation",
+        "current_result_audit": "stale audit",
+        "current_audit_build_result": "stale audit build",
+        "current_diagram_specs": ["stale diagram"],
+    }
+    context = app_module.commit_idea_selection(
+        candidate=result.selected_candidate,
+        derivation=result.selected_derivation,
+        direction=direction, gap=gap, run=run, state=state,
+    )
+    assert context.resolved_hypothesis_snapshot == resolved.to_dict()
+    assert context.final_evidence_assessment == resolved.to_dict()["evidence"]
+    assert context.final_alignment_assessment["level"] == "SURFACE_ONLY"
+    assert context.final_operator_plan == resolved.operator_plan
+    assert context.experiment_spec["base_algorithm"] == "online tree ensemble"
+    assert state["current_result_explanation"] is None
+    assert state["current_result_audit"] is None
+    assert state["current_diagram_specs"] == []
+    science = result.scientific_gate_results[candidate.candidate_id]
     assert any(
         "full audit" in item["issue"]
-        for item in result.scientific_gate_results[candidate.candidate_id]["maturity_limiters"]
+        for item in science["maturity_limiters"]
     )
-    assert any("metaphor-only" in item for item in reasons)
     assert any(
         "delayed-feedback" in item["repair"]
-        for item in result.scientific_gate_results[candidate.candidate_id]["repairs_applied"]
+        for item in science["repairs_applied"]
     )
-    assert any("expert activation" in item for item in reasons)
 
 
 def test_regression_paper_roles_and_counts_are_conservative(selection_case, purpose):
@@ -264,7 +325,8 @@ def test_surface_similarity_and_undefined_formula_fail(selection_case, purpose):
         gap=gap, purpose=purpose, papers=papers, full_audit=audit,
     )
     assert not result.passed
-    assert any("metaphor-only" in item for item in result.fatal_failures)
+    assert result.alignment_level == "SURFACE_ONLY"
+    assert any("surface-only" in item for item in result.major_limiters)
     assert build_modification_spec(candidate, derivation).unresolved_implementation_choices
 
 
@@ -324,7 +386,8 @@ def test_maturity_rejects_surface_word_overlap(selection_case, purpose):
         gap=gap, purpose=purpose, papers=papers, full_audit=audit,
     )
     assert result.maturity_level == IdeaMaturityLevel.REJECTED
-    assert any("metaphor-only" in item for item in result.fatal_failures)
+    assert result.alignment_level == "SURFACE_ONLY"
+    assert any("surface-only" in item for item in result.major_limiters)
 
 
 def test_abstract_only_coherent_candidate_is_exploratory(selection_case, purpose):

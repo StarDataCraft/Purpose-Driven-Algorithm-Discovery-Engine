@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Sequence
 
 from idea_maturity import (
@@ -14,6 +14,9 @@ from primary_idea_contracts import (
 )
 from run_models import ResearchRun
 from scientific_validation import validate_candidate_for_promotion
+from resolved_hypothesis import (
+    ResolvedHypothesis, apply_bounded_repairs, create_resolved_hypothesis,
+)
 from ux_models import DirectionSummary, IdeaDerivation, candidate_modification
 
 
@@ -49,6 +52,8 @@ class PrimaryIdeaSelectionResult:
     maturity_distribution: dict[str, int] = field(default_factory=dict)
     exploratory_candidate_id: str = ""
     selected_maturity_level: str = ""
+    resolved_hypotheses: dict[str, ResolvedHypothesis] = field(default_factory=dict)
+    selected_resolved_hypothesis: ResolvedHypothesis | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -71,6 +76,14 @@ class PrimaryIdeaSelectionResult:
             "maturity_distribution": dict(self.maturity_distribution),
             "exploratory_candidate_id": self.exploratory_candidate_id,
             "selected_maturity_level": self.selected_maturity_level,
+            "resolved_hypotheses": {
+                candidate_id: hypothesis.to_dict()
+                for candidate_id, hypothesis in self.resolved_hypotheses.items()
+            },
+            "selected_resolved_hypothesis": (
+                self.selected_resolved_hypothesis.to_dict()
+                if self.selected_resolved_hypothesis else None
+            ),
         }
 
 
@@ -239,6 +252,7 @@ def select_primary_idea(
     records: list[CandidateRankingRecord] = []
     rejected: dict[str, list[str]] = {}
     scientific_results: dict[str, dict[str, object]] = {}
+    resolved_hypotheses: dict[str, ResolvedHypothesis] = {}
     weights = {
         "user_problem_fit": .12, "evidence_strength": .10,
         "gap_validity": .10, "known_solution_risk": .07,
@@ -256,7 +270,7 @@ def select_primary_idea(
         derivation = derivation_by_id.get(candidate.candidate_id)
         failures: list[str] = ["provenance: missing matching derivation"] if derivation is None else []
         contract_limiters: list[AssessmentIssue] = []
-        if derivation is not None:
+        if derivation is not None and purpose is None:
             contract_failures, contract_limiters = _contract_assessment(
                 candidate, derivation, direction, gap, parent_run,
             )
@@ -266,11 +280,39 @@ def select_primary_idea(
                     IdeaMaturityLevel.EXPLORATORY_HYPOTHESIS)
         maturity_limiters = list(contract_limiters)
         if derivation is not None and purpose is not None:
+            initial_scientific = validate_candidate_for_promotion(
+                candidate=candidate, derivation=derivation, direction=direction,
+                gap=gap, purpose=purpose, papers=papers,
+                full_audit=(full_audits or {}).get(candidate.candidate_id),
+            )
+            repair = apply_bounded_repairs(candidate, derivation, initial_scientific)
+            candidate = repair.repaired_candidate
+            derivation = repair.repaired_derivation
             scientific = validate_candidate_for_promotion(
                 candidate=candidate, derivation=derivation, direction=direction,
                 gap=gap, purpose=purpose, papers=papers,
                 full_audit=(full_audits or {}).get(candidate.candidate_id),
             )
+            scientific = replace(
+                scientific,
+                repairs_applied=tuple(dict.fromkeys(
+                    (*initial_scientific.repairs_applied, *scientific.repairs_applied)
+                )),
+            )
+            repair = replace(
+                repair,
+                repairs_applied=tuple(asdict(item) for item in scientific.repairs_applied),
+            )
+            contract_failures, contract_limiters = _contract_assessment(
+                candidate, derivation, direction, gap, parent_run,
+            )
+            failures.extend(contract_failures)
+            maturity_limiters.extend(contract_limiters)
+            resolved = create_resolved_hypothesis(
+                repair, scientific, problem=gap.failure_type,
+                summary=direction.plain_language_summary,
+            )
+            resolved_hypotheses[candidate.candidate_id] = resolved
             failures.extend(item.issue for item in scientific.fatal_failures)
             maturity_limiters.extend((*scientific.major_limiters, *scientific.minor_limiters))
             maturity = IdeaMaturityLevel.REJECTED if failures else scientific.maturity_level
@@ -343,6 +385,8 @@ def select_primary_idea(
                 scientific_gate_results=scientific_results,
                 maturity_distribution=distribution, exploratory_candidate_id=best[1],
                 selected_maturity_level=IdeaMaturityLevel.EXPLORATORY_HYPOTHESIS.value,
+                resolved_hypotheses=resolved_hypotheses,
+                selected_resolved_hypothesis=resolved_hypotheses.get(best[1]),
             )
         return PrimaryIdeaSelectionResult(
             "NO_COHERENT_IDEA", ranking_records=records,
@@ -350,6 +394,7 @@ def select_primary_idea(
             warnings=["Every candidate failed at least one fatal scientific gate."],
             automatic_recovery_used=automatic_recovery_used,
             scientific_gate_results=scientific_results, maturity_distribution=distribution,
+            resolved_hypotheses=resolved_hypotheses,
         )
     highest = max((item[0] for item in eligible), key=maturity_value)
     pool = [item for item in eligible if item[0] == highest]
@@ -381,6 +426,8 @@ def select_primary_idea(
         confidence, automatic_recovery_used=automatic_recovery_used,
         scientific_gate_results=scientific_results, maturity_distribution=distribution,
         selected_maturity_level=highest.value,
+        resolved_hypotheses=resolved_hypotheses,
+        selected_resolved_hypothesis=resolved_hypotheses.get(winner[2]),
     )
 
 

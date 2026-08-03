@@ -42,6 +42,10 @@ def _failure_semantic_match(text_value: str, failure_value: str) -> bool:
     failure = failure_value.casefold()
     recurring = any(term in failure for term in ("recurr", "recurrent", "repeat"))
     slow_recovery = any(term in failure for term in ("recover", "adaptation", "reuse"))
+    if slow_recovery and not any(term in text for term in (
+        "recovery", "recover", "reuse", "reactivation", "relearn", "adaptation time",
+    )):
+        return False
     if recurring and any(term in text for term in (
         "recurring concept", "recurrent drift", "concept recurrence",
         "recurring regime", "repeated context", "model reuse after drift",
@@ -324,7 +328,11 @@ def validate_candidate_for_promotion(
     if alignment not in {"HARD_VALIDATION_PASSED", "STRONG", "PLAUSIBLE_ACCEPTED"}:
         fatal_failures.append("structural alignment: invalid or no accepted mapping")
     elif "surface similarity" in correspondences or "word overlap" in correspondences:
-        fatal_failures.append("structural alignment: metaphor-only surface correspondence")
+        limiters.append(_limiter(
+            "structural alignment: surface-only correspondence",
+            "Vocabulary overlap does not establish a transferable causal mapping.",
+            "Map and ablate the required signal, state, trigger, response, and fallback roles.",
+        ))
     elif alignment == "PLAUSIBLE_ACCEPTED":
         limiters.append(_limiter(
             "structural alignment: plausible but not yet operator-verified",
@@ -473,7 +481,8 @@ def validate_candidate_for_promotion(
         capability_slot_assessment=capability_plan,
         problem_evidence_level="DIRECT" if counts["direct_support_count"] else "CONTEXT_ONLY",
         mechanism_evidence_level="OPERATIONAL" if not any("mechanism validation" in item for item in fatal_failures) else "NON_OPERATIONAL",
-        alignment_level=("METAPHOR_ONLY" if any("metaphor-only" in item for item in fatal_failures)
+        alignment_level=("SURFACE_ONLY" if any("surface-only" in item.issue for item in unique_limiters)
+                         else "METAPHOR_ONLY" if any("metaphor-only" in item for item in fatal_failures)
                          else "PLAUSIBLE_STRUCTURAL" if alignment == "PLAUSIBLE_ACCEPTED"
                          else "STRONG_STRUCTURAL"),
         prior_art_level=novelty_level,

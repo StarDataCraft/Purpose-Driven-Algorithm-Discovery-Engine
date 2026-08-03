@@ -2328,6 +2328,7 @@ def _selection_context(
     maturity_limiters: tuple[dict[str, object], ...] = (),
     repair_options: tuple[str, ...] = (),
     open_design_choices: tuple[dict[str, object], ...] = (),
+    resolved_hypothesis: dict[str, object] | None = None,
 ) -> SelectedIdeaContext:
     """Validate and construct a selection without mutating session state."""
     errors = []
@@ -2380,6 +2381,12 @@ def _selection_context(
         maturity_limiters=maturity_limiters,
         repair_options=repair_options,
         open_design_choices=open_design_choices,
+        resolved_hypothesis_snapshot=dict(resolved_hypothesis or {}),
+        final_evidence_assessment=dict((resolved_hypothesis or {}).get("evidence", {})),
+        final_alignment_assessment=dict((resolved_hypothesis or {}).get("alignment", {})),
+        final_operator_plan=dict((resolved_hypothesis or {}).get("operator_plan", {})),
+        repairs_applied=tuple((resolved_hypothesis or {}).get("repairs_applied", ())),
+        experiment_spec=dict((resolved_hypothesis or {}).get("experiment_spec", {})),
     )
 
 
@@ -2403,6 +2410,7 @@ def commit_idea_selection(
         maturity_limiters=tuple(assessment.get("maturity_limiters", ())),
         repair_options=tuple(assessment.get("repair_options", ())),
         open_design_choices=tuple(assessment.get("open_design_choices", ())),
+        resolved_hypothesis=selection_record.get("selected_resolved_hypothesis"),
     )
     target.update({
         "selected_idea_id": context.candidate_id,
@@ -2624,8 +2632,13 @@ def render_primary_idea_summary() -> None:
     selected_id = str(record.get("selected_candidate_id", ""))
     if selected_id not in candidates or selected_id not in derivations:
         return
-    candidate = candidates[selected_id]
-    derivation = derivations[selected_id]
+    raw_context = st.session_state.selected_idea_context or {}
+    if isinstance(raw_context, dict) and raw_context.get("resolved_hypothesis_snapshot"):
+        candidate = candidate_from_dict(raw_context["candidate_snapshot"])
+        derivation = derivation_from_dict(raw_context["derivation_snapshot"])
+    else:
+        candidate = candidates[selected_id]
+        derivation = derivations[selected_id]
     science = record.get("scientific_gate_results", {}).get(selected_id, {})
     maturity = science.get("maturity_level", "RESEARCH_WORTHY_HYPOTHESIS")
     exploratory = record.get("status") == "EXPLORATORY_AVAILABLE"
@@ -2813,6 +2826,42 @@ def render_related_papers(direction: object) -> None:
                 f"  Evidence: {excerpts.get(paper.paper_id, 'No direct failure excerpt; included for its stated role.')}  \n"
                 f"  Reason included: {role.replace('_', ' ').lower()}"
             )
+
+
+def render_resolved_papers(context: SelectedIdeaContext) -> None:
+    """Render supporting roles exclusively from the committed evidence assessment."""
+    evidence = context.final_evidence_assessment
+    papers = {
+        paper.paper_id: paper
+        for paper in (*st.session_state.ml_papers, *st.session_state.external_papers)
+    }
+    groups = (
+        ("Direct gap evidence", evidence.get("direct_problem_evidence", ())),
+        ("Current solution evidence", evidence.get("current_solution_evidence", ())),
+        ("External mechanism evidence", evidence.get("external_mechanism_evidence", ())),
+        ("Transfer support", evidence.get("transfer_support", ())),
+        ("Implementation precedent", evidence.get("implementation_precedent", ())),
+        ("Context only", evidence.get("contextual_problem_evidence", ())),
+    )
+    if not evidence.get("direct_problem_evidence"):
+        st.warning("No direct paper-stated failure evidence is currently available.")
+    for label, records in groups:
+        if not records:
+            continue
+        st.markdown(f"**{label}**")
+        for role in records:
+            paper = papers.get(role.get("paper_id", ""))
+            title = paper.title if paper else role.get("paper_id", "Unknown paper")
+            url = (paper.url or paper.doi or "#") if paper else "#"
+            st.markdown(
+                f"- [{title}]({url})  \n"
+                f"  Supported claim: {role.get('supported_claim', 'Not recorded')}  \n"
+                f"  Evidence: {role.get('evidence_excerpt', 'Not recorded')}"
+            )
+    rejected = evidence.get("irrelevant_or_rejected_papers", ())
+    if rejected:
+        with st.expander("Technical diagnostics · Rejected/contextual retrieval results"):
+            st.dataframe(list(rejected), use_container_width=True)
 
 
 def discover_directions_page() -> None:
@@ -3744,8 +3793,12 @@ def explain_idea_page() -> None:
     if plan:
         st.subheader("Capability/operator plan")
         render_fields({
+            "Alignment level": selection_context.final_alignment_assessment.get(
+                "level", assessment.get("assessment_levels", {}).get("alignment", "Not recorded")
+            ),
             "Required capability": plan.get("required_capability", "Not recorded"),
             "Required roles": plan.get("required_roles", []),
+            "Implemented or specified roles": plan.get("covered_mechanism_roles", []),
             "Selected slot bundle": plan.get("selected_slot_bundle", []),
             "Role-to-slot mapping": plan.get("role_to_slot_mapping", {}),
             "Missing roles": plan.get("missing_roles", []),
@@ -3771,7 +3824,8 @@ def explain_idea_page() -> None:
         )
         st.session_state.current_diagram_specs = specs
         st.session_state.current_result_explanation = build_idea_explanation(
-            st.session_state.purpose, direction, derivation, candidate, specs
+            st.session_state.purpose, direction, derivation, candidate, specs,
+            selection_context.resolved_hypothesis_snapshot,
         )
         audit_build = build_and_persist_current_audit(
             candidate, derivation
@@ -3789,11 +3843,21 @@ def explain_idea_page() -> None:
     st.header("Current behavior / 当前做法")
     st.write(explanation.current_behavior)
     st.header("Proposed change / 修改内容")
+    slot_label = (
+        "Selected modification slot bundle"
+        if len(selection_context.final_operator_plan.get("selected_slot_bundle", ())) > 1
+        else "Exact modification slot"
+    )
+    operator_label = (
+        "Possible mathematical realization — schematic operator, not yet specified"
+        if selection_context.resolved_hypothesis_snapshot.get("schematic_operator")
+        else "Exact operator"
+    )
     render_fields({
-        "Exact modification slot": explanation.modification_slot,
+        slot_label: explanation.modification_slot,
         "New state": explanation.new_state_variables,
         "Trigger": explanation.new_trigger,
-        "Rule": explanation.new_rule,
+        operator_label: explanation.new_rule,
         "Information available at inference": explanation.inference_information,
     })
     st.header("Expected result / 预期结果")
@@ -3804,9 +3868,7 @@ def explain_idea_page() -> None:
         "CHANGE": explanation.proposed_change,
         "EXPECTED RESULT": explanation.expected_result,
     })
-    st.info(
-        f"Exact modification slot: **{explanation.modification_slot}**"
-    )
+    st.info(f"{slot_label}: **{explanation.modification_slot}**")
     st.header("Why it might work / 为什么可能有效")
     st.write(explanation.causal_hypothesis)
     for spec in st.session_state.current_diagram_specs:
@@ -3867,7 +3929,7 @@ def explain_idea_page() -> None:
         "Kill criterion": candidate.kill_criterion or experiment.get("failure_rule"),
     })
     st.header("Supporting papers / 支持论文")
-    render_related_papers(direction)
+    render_resolved_papers(selection_context)
     markdown = explanation_markdown(explanation)
     st.download_button(
         "Export research idea as Markdown", markdown,

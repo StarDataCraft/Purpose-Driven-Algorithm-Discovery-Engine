@@ -30,6 +30,7 @@ import ux_models
 import primary_idea_selection
 import primary_idea_contracts
 import session_schema
+import resolved_hypothesis
 from ux_models import (
     PIPELINE_VERSION, SELECTED_IDEA_SCHEMA_VERSION, SelectedIdeaContext,
     build_direction_portfolio, build_idea_derivation, build_idea_explanation,
@@ -91,6 +92,8 @@ def main() -> None:
     print("session-schema required-export check:", schema_diagnostic)
     assert schema_diagnostic["compatible"]
     print("app import result: OK")
+    print("resolved_hypothesis.py path and fingerprint:", resolved_hypothesis.__file__, info["source_fingerprints"]["resolved_hypothesis.py"])
+    print("resolved hypothesis schema:", resolved_hypothesis.RESOLVED_HYPOTHESIS_SCHEMA_VERSION)
     print("primary_idea_selection.py path and fingerprint:", primary_idea_selection.__file__, info["source_fingerprints"]["primary_idea_selection.py"])
     print("primary_idea_contracts.py path and fingerprint:", primary_idea_contracts.__file__, info["source_fingerprints"]["primary_idea_contracts.py"])
     print("selector API version:", primary_idea_selection.PRIMARY_IDEA_SELECTION_API_VERSION)
