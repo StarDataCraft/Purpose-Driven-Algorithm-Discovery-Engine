@@ -29,6 +29,7 @@ import models
 import ux_models
 import primary_idea_selection
 import primary_idea_contracts
+import session_schema
 from ux_models import (
     PIPELINE_VERSION, SELECTED_IDEA_SCHEMA_VERSION, SelectedIdeaContext,
     build_direction_portfolio, build_idea_derivation, build_idea_explanation,
@@ -80,6 +81,16 @@ def main() -> None:
     print("app module file:", app.__file__)
     print("commit SHA:", info["commit_sha"])
     print("app.py path and fingerprint:", app.__file__, info["source_fingerprints"]["app.py"])
+    print("session_schema.py path and fingerprint:", session_schema.__file__, info["source_fingerprints"]["session_schema.py"])
+    external_spec = importlib.util.find_spec("external_discovery_pipeline")
+    print("external_discovery_pipeline.py path and fingerprint:", external_spec.origin if external_spec else None, info["source_fingerprints"]["external_discovery_pipeline.py"])
+    print("session-schema API version:", session_schema.SESSION_SCHEMA_API_VERSION)
+    print("session-state schema version:", session_schema.SESSION_STATE_SCHEMA_VERSION)
+    print("session-schema module path:", session_schema.__file__)
+    schema_diagnostic = app.session_schema_contract_diagnostic()
+    print("session-schema required-export check:", schema_diagnostic)
+    assert schema_diagnostic["compatible"]
+    print("app import result: OK")
     print("primary_idea_selection.py path and fingerprint:", primary_idea_selection.__file__, info["source_fingerprints"]["primary_idea_selection.py"])
     print("primary_idea_contracts.py path and fingerprint:", primary_idea_contracts.__file__, info["source_fingerprints"]["primary_idea_contracts.py"])
     print("selector API version:", primary_idea_selection.PRIMARY_IDEA_SELECTION_API_VERSION)

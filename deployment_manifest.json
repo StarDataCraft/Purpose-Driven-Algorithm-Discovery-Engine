@@ -4,7 +4,7 @@
   "ux_schema_version": "selected-idea-context-v1",
   "expected_entrypoint": "app.py",
   "expected_branch": "main",
-  "app_source_fingerprint": "36cfaca34aa3a355869e45bef0456c8e81df301a590090ca05da73d9fab2494a",
+  "app_source_fingerprint": "8997ff7d0bd5b7215ee6540b2b6effaec5f22158bb130e55191e87c857eddc2e",
   "ux_models_source_fingerprint": "730a5c2eb17cdb977714d700ee81ffdb04a9929f726f827a07fe492e69817f6e",
   "direction_generation_source_fingerprint": "218847142d2e720870603eb3717a08d3335ab05778fd3a7ecbda40acde9f562c",
   "scientific_validation_source_fingerprint": "ef903275b69364b934692e538d0fff1b86db4269b70e33798edbe379ffd2984e",
@@ -13,6 +13,6 @@
   "idea_maturity_source_fingerprint": "4869031c9511ad3ec29c116aa13f951179ba5b563770413d74bfb9978e6fe5c2",
   "idea_pipeline_source_fingerprint": "ff00ea0b4a5eb8bcfe685e87aae0db47aa0c5a23cf5fcad336babb7191f7d002",
   "external_discovery_pipeline_source_fingerprint": "e6cc664521d9cc7bf7da987d3c8cd5500e22ca2142daf3878ccdefbb8d91450d",
-  "session_schema_source_fingerprint": "faaf7d77b742e8ecceaf8898f80ca3c5cffe647f86f73db280821f8953697e38",
+  "session_schema_source_fingerprint": "43d0d5c06a08b4f138e076d9e758f2baf5f754f6e7df34d7eff79f870eb013f1",
   "pipeline_quality_source_fingerprint": "0d8e7be4bd32afd3771a495efdd92c765e74a46e752eff1f1f110d34331b7b65"
 }

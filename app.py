@@ -8,6 +8,7 @@ import io
 import importlib
 import inspect
 import time
+import traceback
 from collections import Counter
 from dataclasses import asdict
 from datetime import date, datetime, timezone
@@ -73,16 +74,57 @@ from diagram_builders import (
     mechanism_transfer_spec,
 )
 from external_discovery_pipeline import SearchPolicy
-from session_schema import (
-    SESSION_STATE_SCHEMA_VERSION, normalize_primary_selection_record,
-    resolve_external_result,
-)
+try:
+    import session_schema as session_schema_module
+except ImportError as exc:
+    session_schema_module = None
+    SESSION_SCHEMA_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+    traceback.print_exc()
+else:
+    SESSION_SCHEMA_IMPORT_ERROR = ""
 from idea_pipeline import derive_ideas_for_direction
 from primary_idea_contracts import (
     PRIMARY_IDEA_SELECTION_API_VERSION, PrimaryIdeaSelectionRequest,
 )
 
 EXPECTED_PRIMARY_IDEA_SELECTION_API_VERSION = "primary-idea-selection-v2"
+EXPECTED_SESSION_SCHEMA_API_VERSION = "session-schema-api-v2"
+REQUIRED_SESSION_SCHEMA_EXPORTS = (
+    "SESSION_SCHEMA_API_VERSION",
+    "SESSION_STATE_SCHEMA_VERSION",
+    "normalize_primary_selection_record",
+    "resolve_external_result",
+)
+
+
+def session_schema_contract_diagnostic(module=None) -> dict[str, object]:
+    """Describe the loaded migration contract without touching missing exports."""
+    loaded_module = session_schema_module if module is None else module
+    if loaded_module is None:
+        available: list[str] = []
+        loaded_version = "missing"
+        module_path = "unavailable"
+    else:
+        available = sorted(
+            name for name in dir(loaded_module) if not name.startswith("_")
+        )
+        loaded_version = getattr(
+            loaded_module, "SESSION_SCHEMA_API_VERSION", "missing"
+        )
+        module_path = getattr(loaded_module, "__file__", "unknown")
+    missing = sorted(set(REQUIRED_SESSION_SCHEMA_EXPORTS) - set(available))
+    return {
+        "compatible": (
+            loaded_module is not None
+            and loaded_version == EXPECTED_SESSION_SCHEMA_API_VERSION
+            and not missing
+        ),
+        "expected_api_version": EXPECTED_SESSION_SCHEMA_API_VERSION,
+        "loaded_api_version": loaded_version,
+        "module_path": module_path,
+        "available_exports": available,
+        "missing_exports": missing,
+    }
 
 
 def selector_contract_diagnostic() -> dict[str, object]:
@@ -304,7 +346,7 @@ def initialize_state() -> None:
         "audit_unavailable_notice_shown": False,
         "current_diagram_specs": [],
         "current_external_result": None,
-        "session_state_schema_version": SESSION_STATE_SCHEMA_VERSION,
+        "session_state_schema_version": session_schema_module.SESSION_STATE_SCHEMA_VERSION,
         "external_result_resolution": "ABSENT",
         "external_result_migration_message": "",
         "external_result_rebuild_required": False,
@@ -315,7 +357,7 @@ def initialize_state() -> None:
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
     if st.session_state.primary_idea_selection_record is not None:
-        st.session_state.primary_idea_selection_record = normalize_primary_selection_record(
+        st.session_state.primary_idea_selection_record = session_schema_module.normalize_primary_selection_record(
             st.session_state.primary_idea_selection_record
         )
     migrate_external_session_state()
@@ -332,7 +374,7 @@ def _external_identity() -> tuple[str, str, str] | None:
 
 def resolve_current_external_result():
     """Return a normalized typed view while persisting only versioned data."""
-    resolution = resolve_external_result(
+    resolution = session_schema_module.resolve_external_result(
         st.session_state.current_external_result, _external_identity()
     )
     st.session_state.external_result_resolution = resolution.status
@@ -362,9 +404,9 @@ def migrate_external_session_state() -> None:
     """Hot-reload migration entry point, executed once on every app run."""
     value = st.session_state.current_external_result
     if value is None:
-        st.session_state.session_state_schema_version = SESSION_STATE_SCHEMA_VERSION
+        st.session_state.session_state_schema_version = session_schema_module.SESSION_STATE_SCHEMA_VERSION
         return
-    resolution = resolve_external_result(value, _external_identity())
+    resolution = session_schema_module.resolve_external_result(value, _external_identity())
     st.session_state.external_result_resolution = resolution.status
     st.session_state.external_result_migration_message = resolution.message
     if resolution.status in {"CURRENT", "MIGRATED", "PARTIALLY_MIGRATED"} and resolution.result:
@@ -372,7 +414,7 @@ def migrate_external_session_state() -> None:
     elif resolution.status in {"IDENTITY_MISMATCH", "INVALID_SCHEMA", "UNRECOVERABLE"}:
         _clear_external_downstream_state()
         st.session_state.external_result_rebuild_required = True
-    st.session_state.session_state_schema_version = SESSION_STATE_SCHEMA_VERSION
+    st.session_state.session_state_schema_version = session_schema_module.SESSION_STATE_SCHEMA_VERSION
 
 
 def apply_discovery_result(result: StructuralDiscoveryResult) -> None:
@@ -3974,6 +4016,20 @@ def research_tools_panel() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Purpose-Driven Algorithm Discovery", layout="wide")
+    schema = session_schema_contract_diagnostic()
+    if not schema["compatible"]:
+        st.title("Purpose-Driven Algorithm Discovery")
+        if SESSION_SCHEMA_IMPORT_ERROR:
+            st.error("Session-schema module import failed.")
+            st.write(SESSION_SCHEMA_IMPORT_ERROR)
+        else:
+            st.error("Session-schema modules are incompatible.")
+        st.write(f"Expected API: {schema['expected_api_version']}")
+        st.write(f"Loaded API: {schema['loaded_api_version']}")
+        st.write(f"Loaded module: {schema['module_path']}")
+        missing = ", ".join(schema["missing_exports"]) or "none"
+        st.write(f"Missing exports: {missing}")
+        return
     selector = selector_contract_diagnostic()
     initialize_state()
     pending = st.session_state.pending_primary_step

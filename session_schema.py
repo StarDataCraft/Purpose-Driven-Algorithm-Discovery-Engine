@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-from external_discovery_pipeline import ExternalDiscoveryResult
+if TYPE_CHECKING:
+    from external_discovery_pipeline import ExternalDiscoveryResult
 
+SESSION_SCHEMA_API_VERSION = "session-schema-api-v2"
 SESSION_STATE_SCHEMA_VERSION = "session-state-v2"
 RESOLUTION_STATUSES = {
     "CURRENT", "MIGRATED", "PARTIALLY_MIGRATED", "IDENTITY_MISMATCH",
@@ -34,15 +37,20 @@ def normalize_primary_selection_record(value: object) -> dict[str, object] | Non
 @dataclass
 class ExternalResultResolution:
     status: str
-    result: ExternalDiscoveryResult | None = None
+    result: "ExternalDiscoveryResult | None" = None
     message: str = ""
 
 
-def resolve_external_result(value: object, expected_identity: tuple[str, str, str] | None = None) -> ExternalResultResolution:
+def resolve_external_result(
+    value: Any,
+    expected_identity: tuple[str, str, str] | None = None,
+) -> ExternalResultResolution:
     if value is None:
         return ExternalResultResolution("ABSENT")
     if isinstance(value, dict) and value.get("schema_version") not in {None, "external-discovery-v2"}:
         return ExternalResultResolution("INVALID_SCHEMA", message=f"Unsupported external schema: {value.get('schema_version')}")
+    from external_discovery_pipeline import ExternalDiscoveryResult
+
     try:
         result = ExternalDiscoveryResult.from_dict(value)
     except (TypeError, ValueError, KeyError, AttributeError) as exc:
